@@ -27,8 +27,15 @@ class MeshLog {
         $name = $config['database'] ?? die("Invalid db config");
         $user = $config['user'] ?? die("Invalid db config");
         $pass = $config['password'] ?? die("Invalid db config");
-        $this->pdo = new PDO("mysql:host=$host;dbname=$name;charset=utf8mb4", $user, $pass);
-        $this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $options = array(PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION);
+        if(is_file("/srv/ssl/ca.pem")) {
+            $options = array(PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                             PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT => true,
+                             PDO::MYSQL_ATTR_SSL_KEY  =>'/srv/ssl/client-key.pem',
+                             PDO::MYSQL_ATTR_SSL_CERT =>'/srv/ssl/client-cert.pem',
+                             PDO::MYSQL_ATTR_SSL_CA   =>'/srv/ssl/ca.pem');
+        }
+        $this->pdo = new PDO("mysql:host=$host;dbname=$name;charset=utf8mb4", $user, $pass, $options);
         $this->loadSettings();
     }
 

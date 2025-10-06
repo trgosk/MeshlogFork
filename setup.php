@@ -4,11 +4,19 @@
     function testConfig($servername, $dbname, $username, $password) {
         $pdo = null;
         try {
+            $options = array(PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION);
+            if(is_file("/srv/ssl/ca.pem")) {
+                $options = array(PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                                 PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT => true,
+                                 PDO::MYSQL_ATTR_SSL_KEY  =>'/srv/ssl/client-key.pem',
+                                 PDO::MYSQL_ATTR_SSL_CERT =>'/srv/ssl/client-cert.pem',
+                                 PDO::MYSQL_ATTR_SSL_CA   =>'/srv/ssl/ca.pem');
+            }
             $pdo = new PDO(
                 "mysql:host=$servername;charset=utf8mb4",
                 $username,
                 $password,
-                array(PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION)
+                $options
             );
 
             $pdo->exec("CREATE DATABASE IF NOT EXISTS `$dbname` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
@@ -17,7 +25,7 @@
                 "mysql:host=$servername;dbname=$dbname;charset=utf8mb4",
                 $username,
                 $password,
-                array(PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION)
+                $options
             );
         } catch (PDOException $e) {
             $pdo = null;
