@@ -3,8 +3,6 @@ FROM php:8.4-fpm-alpine
 RUN apk add --no-cache nginx supervisor bash tzdata \
 	&& docker-php-ext-install mysqli pdo pdo_mysql
 
-ENV TZ=${TIMEZONE}
-
 ENV APP_ROOT=/var/www/html
 RUN mkdir -p ${APP_ROOT} /run/php /run/nginx /var/log/supervisor
 

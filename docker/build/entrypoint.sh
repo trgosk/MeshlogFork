@@ -11,10 +11,10 @@ if [[ ! -f "$APP_ROOT/config.php" ]]; then
 fi
 
 sed -i \
-	-e "s/^\(\s*\$servername\s*=\s*\).*/\1\"${DB_HOST}\";/" \
-	-e "s/^\(\s*\$dbname\s*=\s*\).*/\1\"${DB_NAME}\";/" \
-	-e "s/^\(\s*\$username\s*=\s*\).*/\1\"${DB_USER}\";/" \
-	-e "s/^\(\s*\$password\s*=\s*\).*/\1\"${DB_PASS}\";/" \
+	-e "s/%DB_HOST%/${DB_HOST}/g" \
+	-e "s/%DB_NAME%/${DB_NAME}/g" \
+	-e "s/%DB_USER%/${DB_USER}/g" \
+	-e "s/%DB_PASSWORD%/${DB_PASS}/g" \
 	"$APP_ROOT/config.php"
 
 exec "$@"
