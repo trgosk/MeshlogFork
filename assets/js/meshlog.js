@@ -1130,7 +1130,7 @@ class MeshLog {
             }
         }
 
-        fetch(`${url}?${urlparams.toString()}`)
+        fetch(`${document.URL}${url}?${urlparams.toString()}`)
             .then(response => response.json())
             .then(data => onResponse(data));
     }
