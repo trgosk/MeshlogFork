@@ -150,30 +150,28 @@ class MeshLogEntity {
         return false;
     }
 
-    public static function getAll($meshlog, $params) {
+public static function getAll($meshlog, $params) {
         $offset = $params['offset'] ?? 0;
         $count = $params['count'] ?? DEFAULT_COUNT;
         $after_ms = $params['after_ms'] ?? 0;
         $before_ms = $params['before_ms'] ?? 0;
         $secret = $params['secret'] ?? false;
-        $order = $params['order'] ?? 'DESC';
 
-        $where = $params['where'] ?? array();
-        if ($order != 'ASC') $order = 'DESC';
-
+        $where = $params['where'] ?: array();
+        $sqlJoin = $params['join'] ?? '';
         $sqlWhere = '';
         $sqlBind = array();
 
         if ($after_ms > 0) {
             $after_ms = floor($after_ms / 1000);
-            $sqlWhere = 'WHERE created_at > FROM_UNIXTIME(:after_ms) ';
+            $sqlWhere = 'WHERE t.created_at > FROM_UNIXTIME(:after_ms) ';
         }
         if ($before_ms > 0) {
             $before_ms = floor($before_ms / 1000);
             if (strlen($sqlWhere)) {
-                $sqlWhere .= " AND created_at < FROM_UNIXTIME(:before_ms)";
+                $sqlWhere .= " AND t.created_at < FROM_UNIXTIME(:before_ms)";
             } else {
-                $sqlWhere = " WHERE created_at < FROM_UNIXTIME(:before_ms)";
+                $sqlWhere = " WHERE t.created_at < FROM_UNIXTIME(:before_ms)";
             }
         }
 
@@ -192,7 +190,7 @@ class MeshLogEntity {
         if ($count > MAX_COUNT) $count = MAX_COUNT;
         $tableStr = static::$table;
     
-        $query = $meshlog->pdo->prepare("SELECT * FROM $tableStr $sqlWhere ORDER BY id $order LIMIT :offset,:count");
+        $query = $meshlog->pdo->prepare("SELECT t.* FROM $tableStr t $sqlJoin $sqlWhere  ORDER BY t.id DESC LIMIT :offset,:count");
         
         foreach ($sqlBind as $b) {
             if (sizeof($b) != 3) continue;
