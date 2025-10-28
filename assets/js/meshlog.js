@@ -230,18 +230,31 @@ class MeshLogContact extends MeshLogObject {
         let type = document.createElement("div");
         type.classList.add("sp");
 
+        let first_seen = document.createElement("div");
+        first_seen.classList.add("sp");
+        first_seen.style.wordBreak = 'break-all';
+
         let pubkey = document.createElement("div");
         pubkey.classList.add("sp");
         pubkey.style.wordBreak = 'break-all';
 
+        let telemetry = document.createElement("span");
+        telemetry.classList.add("sp");
+        telemetry.classList.add("sm");
+
+        let telemetryDetail = document.createElement("span");
+        telemetryDetail.classList.add("sp");
 
         group.appendChild(date);
         group.appendChild(icon);
         group.appendChild(hash);
         group.appendChild(name);
+        group.appendChild(telemetry);
 
         details.appendChild(type);
+        details.appendChild(first_seen);
         details.appendChild(pubkey);
+        details.appendChild(telemetryDetail);
         details.hidden = true;
 
         container.appendChild(group);
@@ -299,7 +312,10 @@ class MeshLogContact extends MeshLogObject {
             icon,
             details,
             type,
-            pubkey
+            pubkey,
+            first_seen,
+            telemetry,
+            telemetryDetail
         };
 
         if (root) root.appendChild(container);
@@ -414,6 +430,7 @@ class MeshLogContact extends MeshLogObject {
             this.dom.hash.classList.remove("prio-5");
         }
 
+        this.dom.first_seen.innerText = `First Seen: ${this.data.created_at}`;
         this.dom.pubkey.innerText = `Public Key: ${this.data.public_key}`;
         this.dom.container.dataset.type = this.adv.data.type;
 
@@ -435,9 +452,18 @@ class MeshLogContact extends MeshLogObject {
         this.dom.date.innerText = this.adv.data.sent_at;
         this.dom.hash.innerText = `[${hashstr}]`;
 
+        if (this.telemetry) {
+            for (let i=0;i<this.telemetry.length;i++) {
+                let sensor = this.telemetry[i];
+                if (sensor.type == 116) {
+                    this.dom.telemetry.innerText = `${sensor.value} V`;
+                }
+            }
+        }
+
         const removeEmojis = (str) => {
             return str.replace(
-                /([\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|\uD83E[\uDD00-\uDFFF])/g,
+                /([\u200D\uFE0F]|[\u2600-\u27BF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|\uD83E[\uDD00-\uDFFF])/g,
                 ''
             );
         };
@@ -451,6 +477,7 @@ class MeshLogContact extends MeshLogObject {
         this.dom.container.dataset.time = this.adv.time;
         this.dom.container.dataset.name = removeEmojis(this.adv.data.name).trim();
         this.dom.container.dataset.hash = hashstr;
+        this.dom.container.dataset.first_seen = new Date(this.data.created_at).getTime();
     }
 
     updateMarker() {
@@ -479,6 +506,11 @@ class MeshLogContact extends MeshLogObject {
     }
 
     pathTag() { return 'c'; }
+
+    checkHash(hash) {
+        let chash = this.data.public_key.substr(0, hash.length);
+        return chash.toUpperCase() === hash.toUpperCase();
+    }
 }
 
 class MeshLogGroupChild extends MeshLogObject {
@@ -909,6 +941,12 @@ class MeshLog {
                     return a.dataset.name.localeCompare(b.dataset.name);
                 },
             },
+            {
+                name: 'First Seen',
+                fn: (a, b) => {
+                    return b.dataset.first_seen.localeCompare(a.dataset.first_seen);
+                },
+            },
         ];
 
         this.order = {
@@ -1284,6 +1322,7 @@ class MeshLog {
             if (!adv) return;
 
             contact.adv = adv;
+            contact.telemetry = contact.data.telemetry ?? false;
 
             let hashstr = contact.data.public_key.substr(0,2);
 
@@ -1416,15 +1455,43 @@ class MeshLog {
         });
     }
 
+    findNearestContact(lat, lon, hash, repeater) {
+        let matches = 0;
+        let match = false;
+        let matchDist = 99999;
+
+        Object.entries(this.contacts).forEach(([k,c]) => {
+            if (c.checkHash(hash) && c.adv && !c.adv.isVeryExpired() && (!repeater || c.isRepeater())) {
+                let current = [c.adv.data.lat, c.adv.data.lon];
+                if (current[0] == 0 && current[1] == 0) return;
+
+                matches++;
+                const dist = haversineDistance(lat, lon, current[0], current[1]);
+
+                if (!match || dist < matchDist) {
+                    match = c;
+                    matchDist = dist;
+                }
+            }
+        });
+
+        if (!match) return false;
+
+        return {
+            result: match,
+            distance: matchDist,
+            matches: matches
+        };
+    }
+
     showPath(id, path, src, dst, color) {
         if (this.map_layers.hasOwnProperty(id)) return;
 
         // TODO: generate "link" pairs. If same node pair exists, place new layer under and with larger radius
 
         let layers = [];
-        let last = [];
+        let start = [];
         let hashes = path ? path.split(',') : [];
-
 
         // Show end/dst on map. Sould be logger
         Object.entries(this.contacts).forEach(([k,v]) => {
@@ -1437,85 +1504,35 @@ class MeshLog {
             }
         });
 
-        // Show start/src on map
-        if (!src || (src.adv && src.isClient())) {
-            // If source is client, draw circle on first repeater
-            if (hashes.length > 0) {
-                Object.entries(this.contacts).forEach(([k,v]) => {
-                    if (v.hash == hashes[0] && v.adv && !v.adv.isVeryExpired() && v.isRepeater()) {
-                        if (v.adv.data.lat != 0 && v.adv.data.lon != 0) {
-                            last.push([v.adv.data.lat, v.adv.data.lon]);
-                            if (v.marker) {
-                                this.visible_markers.push(v.marker);
-                                this.map.removeLayer(v.marker);
-                                v.marker.addTo(this.map);
-                            }
-                        }
-                    }
-                });
-            }
-
-            for (let i=0;i<last.length;i++) {
-                let circle = L.circle(last[i], {
-                    color: color,
-                    fillColor: color,
-                    fillOpacity: 0.2,
-                    radius: 1000
-                });
-                layers.push(circle);
-            }
-        } else if (src.adv) {
-            // Starts from node
-            if (src.marker) {
-                this.visible_markers.push(src.marker);
-                this.map.removeLayer(src.marker);
-                src.marker.addTo(this.map);
-            }
-            if (src.adv.data.lat != 0 && src.adv.data.lon != 0) {
-                last.push([src.adv.data.lat, src.adv.data.lon]);
-            }
-        }
-
         const ln_weight = 2;
         const ln_outline = 4;
         const ln_offset = 3;
         const ln_max_offets = 6;
 
         let prev = [dst.data.lat, dst.data.lon];
+        let addCircle = false;
 
+        if (src && !src.isClient()) {
+            hashes.unshift(src.data.public_key);
+        } else {
+            addCircle = true;
+        }
+
+        let warnings = [];
         for (let i=hashes.length-1;i>=0;i--) {
             let hash = hashes[i];
-            let matches = 0;
-            let match = false;
-            let matchDist = 99999;
-
-            // Find nearest repeater with hash
-            Object.entries(this.contacts).forEach(([k,c]) => {
-                if (c.hash == hash && c.adv && !c.adv.isVeryExpired() && c.isRepeater()) {
-                    let current = [c.adv.data.lat, c.adv.data.lon];
-                    if (current[0] == 0 && current[1] == 0) return;
-
-                    matches++;
-                    const dist = haversineDistance(prev[0], prev[1], current.lat, current.lon);
-                    if (!match || dist < matchDist) {
-                        match = c;
-                        matchDist = dist;
-                    }
-                }
-            });
-
-            if (matches > 1) {
-                this.showWarning(`Multiple paths (${matches}) detected to ${hash}. Showing shortest.`);
-            } else {
-                this.showWarning('');
-            }
+            let nearest = this.findNearestContact(prev[0], prev[1], hash, true);
 
             // Valid repeater found?
-            if (match) {
-                this.visible_markers.push(match.marker);
-                this.map.removeLayer(match.marker);
-                match.marker.addTo(this.map);
-                let current = [match.adv.data.lat, match.adv.data.lon];
+            if (nearest) {
+                if (nearest.matches > 1) {
+                    warnings.push(`Multiple paths (${nearest.matches}) detected to ${hash}. Showing shortest.`);
+                }
+
+                this.visible_markers.push(nearest.result.marker);
+                this.map.removeLayer(nearest.result.marker);
+                nearest.result.marker.addTo(this.map);
+                let current = [nearest.result.adv.data.lat, nearest.result.adv.data.lon];
                 let pair_id = `${prev[0]}-${prev[1]}_${current[0]}-${current[1]}`;
 
                 if (!this.link_pairs.hasOwnProperty(pair_id)) {
@@ -1539,21 +1556,31 @@ class MeshLog {
                     current
                 ], {color: color, weight: ln_weight, offset: offset}));
 
-                prev = [match.adv.data.lat, match.adv.data.lon];
+                prev = [nearest.result.adv.data.lat, nearest.result.adv.data.lon];
             }
         }
+        this.showWarning(warnings.join("\n"));
 
-        let current = [dst.data.lat, dst.data.lon];
-        for (let j=0;j<last.length;j++) {
-            layers.push(L.polyline([
-                last[j],
-                current
-            ], {color: 'white', weight: ln_outline}));
+        if (addCircle) {
+            let pair_id = `c_${prev[0]}-${prev[1]}`;
+            let r = 1000;
+            let op = .2
 
-            layers.push(L.polyline([
-                last[j],
-                current
-            ], {color: color, weight: ln_weight}));
+            if (!this.link_pairs.hasOwnProperty(pair_id)) {
+                this.link_pairs[pair_id] = 0;
+            } else {
+                r -= this.link_pairs[pair_id] * 40;
+                this.link_pairs[pair_id]++;
+                op = 0;
+            }
+
+            let circle = L.circle(prev, {
+                color: color,
+                fillColor: color,
+                fillOpacity: op,
+                radius: r
+            });
+            layers.push(circle);
         }
 
         let group = L.layerGroup(layers).addTo(this.map);
@@ -1568,6 +1595,7 @@ class MeshLog {
         this.visible_markers = [];
         this.link_pairs = {};
         this.fadeMarkers();
+        this.showWarning('');
     }
 
     clearHighlights() {

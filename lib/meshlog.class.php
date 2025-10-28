@@ -9,6 +9,7 @@ require_once 'meshlog.channel_message.class.php';
 require_once 'meshlog.channel.class.php';
 require_once 'meshlog.reporter.class.php';
 require_once 'meshlog.setting.class.php';
+require_once 'meshlog.telemetry.class.php';
 require_once 'meshlog.user.class.php';
 
 define("MAX_COUNT", 5000);
@@ -16,7 +17,7 @@ define("DEFAULT_COUNT", 500);
 
 class MeshLog {
     private $error = '';
-    private $version = 1;
+    private $version = 2;
     private $settings = array(
         MeshlogSetting::KEY_DB_VERSION => 0,
         MeshlogSetting::KEY_MAX_CONTACT_AGE => 1814400
@@ -37,6 +38,8 @@ class MeshLog {
         }
         $this->pdo = new PDO("mysql:host=$host;dbname=$name;charset=utf8mb4", $user, $pass, $options);
         $this->loadSettings();
+
+        $this->error = $this->checkUpdates();
     }
 
     function __destruct() {
@@ -81,7 +84,7 @@ class MeshLog {
 
     function checkUpdates() {
         if ($this->version != $this->getConfig(MeshlogSetting::KEY_DB_VERSION, 0)) {
-            return "Database upgrade required! <a href=\"login.php\">Login</a>";
+            return "Database upgrade required! <a href=\"setup.php\">Login</a>";
         };
         return 0;
     }
@@ -140,6 +143,9 @@ class MeshLog {
                 break;
             case 'SYS':
                 return $this->insertSelfReport($data, $reporter);
+                break;
+            case 'TEL':
+                return $this->insertTelemetry($data, $reporter);
                 break;
             case 'RAW':
                 return;
@@ -222,6 +228,25 @@ class MeshLog {
         return $grpmsg->save($this);
     }
 
+    private function insertTelemetry($data, $reporter) {
+        if (!$reporter) return $this->repError('no reporter');
+
+        $pubkey = $data['contact']['pubkey'] ?? null;
+        if (!$pubkey) return $this->repError('no key');
+
+        $contact = MeshLogContact::findBy("public_key", $pubkey, $this);
+
+        if (!$contact) {
+            return $this->repError('contact doesnt exist');
+        }
+
+        $tel = MeshLogTelemetry::fromJson($data, $this);
+        $tel->reporter_ref = $reporter;
+        $tel->contact_ref = $contact;
+
+        return $tel->save($this);
+    }
+
     // TODO
     private function insertSelfReport($data, $reporter) {
         if (!$reporter) return;
@@ -254,13 +279,20 @@ class MeshLog {
         if ($params['advertisements'] || $maxage) {
             foreach ($results['objects'] as $k => $c) {
                 $id = $c['id'];
+
+                if ($params['telemetry']) {
+                    $tel = MeshLogTelemetry::findBy("contact_id", $id, $this, array('created_at' => array('operator' => '>', 'value' => $maxage)));
+                    if ($tel) {
+                        $c['telemetry'] = json_decode($tel->data);
+                    }
+                }
+
                 $ad = MeshLogAdvertisement::findBy("contact_id", $id, $this, array('created_at' => array('operator' => '>', 'value' => $maxage)));
                 if ($ad) {
                     $c['advertisement'] = $ad->asArray();
                     $out[] = $c;
                 }
             }
-
         }
 
         return array("objects" => $out);
