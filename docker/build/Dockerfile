@@ -1,12 +1,4 @@
-FROM php:8.4-fpm-alpine as alpine-upgraded
-
-RUN apk upgrade --no-cache
-
-# Main image
-FROM scratch
-
-COPY --from=alpine-upgraded / /
-CMD ["/bin/sh"]
+FROM php:8.4-fpm-alpine
 
 RUN apk add --no-cache nginx supervisor bash tzdata \
 	&& docker-php-ext-install mysqli pdo pdo_mysql
