@@ -1,12 +1,30 @@
-// TODO: Each Object Type sohuld have its own class with "updateDom()" function, that will update DOM with changed new values
+class Settings {
+    static get(key, def=undefined) {
+        if (!localStorage.hasOwnProperty(key)) {
+            localStorage[key] = def;
+        }
+        return localStorage[key];
+    }
+
+    static getBool(key, def=undefined) {
+        if (!localStorage.hasOwnProperty(key)) {
+            localStorage[key] = def;
+        }
+        return localStorage[key] === "true";
+    }
+
+    static set(key, value) {
+        localStorage[key] = value;
+    }
+}
 
 class MeshLogObject {
     constructor(meshlog, data) {
         this._meshlog = meshlog;
-        this.data = {};
+        this.data = {}; // db data
         this.flags = {};
-        this.time = 0;
-        this.highlight = false;
+        this.dom = null;
+        this.time = 0; // created_at
         this.merge(data);
     }
 
@@ -16,311 +34,250 @@ class MeshLogObject {
         this.time = new Date(data.created_at).getTime();
     }
 
-    createDom(root) {}
-
+    // override
+    createDom(recreate = false) {}
     updateDom() {}
 
-    update() {
-        this.updateDom();
+    static onclick(e) {}
+    static onmouseover(e) {}
+    static onmouseout(e) {}
+    static oncontextmenu(e) {}
+}
+
+class MeshLogReporter extends MeshLogObject {
+    constructor(meshlog, data) {
+        super(meshlog, data);
+        this.contact_id = -1;
+        this.getContactId();
+    }
+
+    getContactId() {
+        if (this.contact_id == -1) {
+            let contact = Object.values(this._meshlog.contacts)
+                .find(obj => obj.data.public_key == this.data.public_key);
+            if (contact) {
+                this.contact_id = contact.data.id;
+            }
+        }
+
+        return this.contact_id;
     }
 }
 
-class MeshLogReporter extends MeshLogObject {}
-class MeshLogChannel extends MeshLogObject {}
+class MeshLogChannel extends MeshLogObject {
+    constructor(meshlog, data) {
+        super(meshlog, data);
+    }
+
+    isEnabled() {
+        return Settings.getBool(`channels.${this.data.id}.enabled`, true);
+    }
+
+    createDom(recreate = false) {
+        if (this.dom && !recreate) return this.dom;
+
+        if (this.dom && this.dom.container && this.dom.container.parentNode) {
+            this.dom.container.parentNode.removeChild(this.dom.container);
+            this.dom = null;
+        }
+
+        const self = this;
+
+        let cb = this._meshlog.__createCb(
+            this.data.name,
+            '',
+            `channels.${this.data.id}.enabled`,
+            this.isEnabled(),
+            (e) => {
+                this.enabled = e.target.checked;
+                self._meshlog.__onTypesChanged();
+            }
+        );
+
+        this.dom = {
+            cb: cb,
+        };
+
+        return this.dom;
+    }
+}
 
 class MeshLogContact extends MeshLogObject {
     constructor(meshlog, data) {
         super(meshlog, data);
+        this.adv = null;
+        this.last = null;
+        this.telemetry = null;
+        this.marker = null;
+
         this.flags.dupe = false;
         this.hash = data.public_key.substr(0, 2).toLowerCase();
-        this.messages = {};
+
+        if (data.advertisement) {
+            this.adv = new MeshLogAdvertisement(meshlog, data.advertisement);
+            this.last = this.adv;
+            delete data.advertisement;
+        }
+
+        if (data.telemetry) {
+            this.telemetry = data.telemetry; // todo: use object
+            delete data.telemetry;
+        }
     }
 
-    addMessage(msg) {
-        this.messages[msg.data.hash] = msg;
+    static onclick(e) {
+        this.expanded = !this.expanded;
+        this.updateDom();
     }
 
-    getAllMessages() {
-        let grps = [];
-        Object.entries(this._meshlog.messages).forEach(([_,grp]) => {
-            let add = false;
-            Object.entries(grp.messages).forEach(([_,msg]) => {
-                if (msg.data.contact_id == this.data.id) {
-                    add = true;
+    static onmouseover(e) {
+        // Show marker
+        const descid = `c_${this.data.id}`;
+        this._meshlog.layer_descs[descid] = {
+            paths: [],
+            markers: new Set().add(this.data.id),
+            warnings: []
+        }
+        this._meshlog.updatePaths();
+    }
+
+    static onmouseout(e) {
+        const descid = `c_${this.data.id}`;
+        delete this._meshlog.layer_descs[descid];
+        this._meshlog.updatePaths();
+    }
+
+    static oncontextmenu(e) {
+        e.preventDefault();
+
+        this._meshlog.dom_contextmenu
+        const menu = this._meshlog.dom_contextmenu;
+
+        while (menu.hasChildNodes()) {
+            menu.removeChild(menu.lastChild);
+        }
+
+        let saveGpx = (data, name) => {
+            let gpxContent = `<?xml version="1.0" encoding="UTF-8"?>\n`;
+            gpxContent += `<gpx version="1.1" creator="Meshlog">\n`;
+            gpxContent += data;
+            gpxContent += `</gpx>`;
+
+            const blob = new Blob([gpxContent], { type: "application/gpx+xml" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = name;
+            a.click();
+        };
+
+        const c = this;
+
+        let miGpx = document.createElement("div");
+        miGpx.classList.add('menu-item');
+        miGpx.innerText = "Export to GPX";
+        miGpx.onclick = (e) => {
+            if (c.adv) {
+                const wpt = `<wpt lat="${c.adv.data.lat}" lon="${c.adv.data.lon}"><name>${escapeXml(c.data.name)}</name></wpt>\n`;
+                saveGpx(wpt, `meshlog_contact_${c.data.id}.gpx`);
+            }
+        };
+
+        let miAll = document.createElement("div");
+        miAll.classList.add('menu-item');
+        miAll.innerText = "Export all to GPX";
+        miAll.onclick = (e) => {
+            let wpt = '';
+            Object.entries(c._meshlog.contacts).forEach(([k,v]) => {
+                if (v.adv && (v.adv.lat != 0 || v.adv.lon != 0)) {
+                    wpt += `<wpt lat="${v.adv.data.lat}" lon="${v.adv.data.lon}"><name>${escapeXml(v.data.name)}</name></wpt>\n`;
                 }
             });
-            if (add) { grps.push(grp); }
-        });
+            saveGpx(wpt, `meshlog_contacts.gpx`);
+        };
 
-        return grps;
+        menu.appendChild(miGpx);
+        menu.appendChild(miAll);
+
+        menu.style.display = 'block';
+        menu.style.left = `${e.pageX}px`;
+        menu.style.top = `${e.pageY}px`;
     }
 
     showNeighbors() {
-        const pathId = `${this.pathTag()}_${this.data.id}`;
-        if (this._meshlog.map_layers.hasOwnProperty(pathId)) return;
-        let links = {};
-
-        // Works only for repeaters and ADV messages
-        if (this.isRepeater() || this.isRoom()) {
-            Object.entries(this._meshlog.messages).forEach(([_,grp]) => {
-                Object.entries(grp.messages).forEach(([_,msg]) => {
-                    if (!(msg instanceof MeshLogAdvertisement)) return;
-
-
-                    if (msg.isExpired()) return;
-
-                    let path = msg.data.path;
-                    let parts = path.split(",");
-
-                    const contact = this._meshlog.contacts[msg.data.contact_id];
-                    const idx = parts.indexOf(this.hash);
-                    let src = -1;
-                    let dst = -1;
-
-
-                    if (idx == 0) {
-                        src = contact ? contact.data.public_key : msg.data.public_key;
-                    } else if (idx > 0) {
-                        src = parts[idx-1];
-                    }
-
-                    if (contact && (contact.isRepeater() || contact.isRoom())) {
-                        if (contact.data.id == this.data.id) {
-                            dst = parts[0];
-                        }
-                    }
-                        
-                    if (idx != -1) {
-                        if ((idx + 1) < parts.length) {
-                            dst = parts[idx+1];
-                        }
-                    }
-
-                    if (src != -1) {
-                        if (!links.hasOwnProperty(src)) {
-                            links[src] = {
-                                in: true,
-                                out: false
-                            };
-                        } else {
-                            links[src].in = true;
-                        }
-                    }
-
-                    if (dst != -1) {
-                        if (!links.hasOwnProperty(dst)) {
-                            links[dst] = {
-                                in: false,
-                                out: true
-                            };
-                        } else {
-                            links[dst].out = true;
-                        }
-                    }
-
-                    // If parts is empty, add to incoming
-                    // Add to incoming if path is empty (direct) or 
-                });
-            });
-        }
-
-        const _nocoord = function(c) {
-            return (!c || c.length != 2 || (c[0] == 0 && c[1] == 0))
-        };
-
-        let layers = [];
-        let src = [this.adv.data.lat, this.adv.data.lon];
-        if (_nocoord(src)) return;
-
-        const ln_weight = 2;
-        const ln_outline = 4;
-        const ln_offset = 3;
-
-        Object.entries(links).forEach(([hash,dir]) => {
-            let dst = this._meshlog.findContactByHash(hash);
-            if (!dst) {
-                console.log(`contact not found: ${dst}`)
-                return
-            }
-
-            if (!dst.adv) {
-                console.log(`contact ADV not found: ${dst}`)
-                return
-            }
-            dst = [dst.adv.data.lat, dst.adv.data.lon];
-
-            if (_nocoord(dst)) return;
-
-            // Red is incoming
-            if (dir.in) {
-                layers.push(L.polyline([
-                    src,
-                    dst
-                ], {color: 'white', weight: ln_outline}));
-
-                layers.push(L.polyline([
-                    src,
-                    dst
-                ], {color: '#F44336', weight: ln_weight}));
-            }
-
-            // Blue is outgoing
-            if (dir.out) {
-                let offset = dir.in ? ln_offset : 0;
-                layers.push(L.polyline([
-                    src,
-                    dst
-                ], {color: 'white', weight: ln_outline, offset: offset}));
-
-                layers.push(L.polyline([
-                    src,
-                    dst
-                ], {color: '#3949AB', weight: ln_weight, offset: offset}));
-            }
-        });
-
-        let group = L.layerGroup(layers).addTo(this._meshlog.map);
-        this._meshlog.map_layers[pathId] = group;
-
-        return links;
+        // TODO
     }
 
     hideNeighbors() {
-        const pathId = `${this.pathTag()}_${this.data.id}`;
-        if (!this._meshlog.map_layers.hasOwnProperty(pathId)) return;
-        this._meshlog.map.removeLayer(this._meshlog.map_layers[pathId]);
-        delete this._meshlog.map_layers[pathId];
+        // TODO
     }
 
-    getColor(str) {
-        let hash = 0;
-        for (let i = 0; i < this.data.name.length; i++) {
-          hash = ((hash << 5) - hash) + this.data.name.charCodeAt(i);
-          hash |= 0;
-        }
-        const threeByteHash = hash >>> 0 & 0xFFFFFF;
-        return threeByteHash.toString(16).padStart(6, '0');
-    }
+    createDom(recreate = false) {
+        if (this.dom && !recreate) return this.dom;
 
-    createDom(root) {
-        if (this.dom) return this.dom.container;
-
-        let container = document.createElement("div");
-
-        let group = document.createElement("div");
-        group.classList.add("log-entry");
-
-        let name = document.createElement("span");
-        name.classList.add("sp");
-        name.classList.add("t");
-
-        let date = document.createElement("span");
-        date.classList.add("sp");
-        date.classList.add("c");
-
-        let hash = document.createElement("span");
-        hash.classList.add("sp");
-
-        let icon = document.createElement("img");
-        icon.classList.add("ti");
-
-
-        let details = document.createElement("div");
-
-        let type = document.createElement("div");
-        type.classList.add("sp");
-
-        let first_seen = document.createElement("div");
-        first_seen.classList.add("sp");
-        first_seen.style.wordBreak = 'break-all';
-
-        let pubkey = document.createElement("div");
-        pubkey.classList.add("sp");
-        pubkey.style.wordBreak = 'break-all';
-
-        let telemetry = document.createElement("span");
-        telemetry.classList.add("sp");
-        telemetry.classList.add("sm");
-
-        let telemetryDetail = document.createElement("span");
-        telemetryDetail.classList.add("sp");
-
-        group.appendChild(date);
-        group.appendChild(icon);
-        group.appendChild(hash);
-        group.appendChild(name);
-        group.appendChild(telemetry);
-
-        details.appendChild(type);
-        details.appendChild(first_seen);
-        details.appendChild(pubkey);
-        details.appendChild(telemetryDetail);
-        details.hidden = true;
-
-        container.appendChild(group);
-        container.appendChild(details);
-
-        const self = this;
-
-        group.onclick = (e) => {
-            const id = self.data.id;
-            if (!self._meshlog.visible_contacts.hasOwnProperty(id)) {
-                self.highlight = true;
-                self._meshlog.visible_contacts[id] = 1;
-                self.dom.details.hidden = false;
-            } else {
-                self.highlight = false;
-                self.dom.details.hidden = true;
-                delete self._meshlog.visible_contacts[id];
-            }
-            self.updateDom();
-            self._meshlog.update();
+        if (this.dom && this.dom.container && this.dom.container.parentNode) {
+            this.dom.container.parentNode.removeChild(this.dom.container);
+            this.dom = null;
         }
 
-        group.onmouseover = (e) => {
-            // Highligt messages
-            // Draw adv travels
-            
-            Object.entries(this.messages).forEach(([k,msg]) => {
-                msg.highlight = true;
-                msg.updateDom();
-            });
+        let divContainer = document.createElement("div");
+        let divContact = document.createElement("div");
+        let divDetails = document.createElement("div");
 
-            this.showNeighbors();
-            this._meshlog.visible_markers = [
-                this.marker
-            ];
-            this._meshlog.fadeMarkers();
-        }
+        divContact.classList.add("log-entry");
+        divContact.instance = this;
+        divDetails.hidden = true;
 
-        group.onmouseleave = (e) => {
-            Object.entries(this.messages).forEach(([k,msg]) => {
-                msg.highlight = false;
-                msg.update();
-            });
+        let imType = document.createElement("img");
+        let spDate = document.createElement("span");
+        let spHash = document.createElement("span");
+        let spName = document.createElement("span");
+        let spTelemetry = document.createElement("span");
 
-            this.hideNeighbors();
-            this._meshlog.visible_markers = [];
-            this._meshlog.fadeMarkers();
-        }
+        imType.classList.add(...['ti']);
+        spDate.classList.add(...['sp', 'c']);
+        spHash.classList.add(...['sp', 'prio-4']);
+        spName.classList.add(...['sp', 't']);
+        spTelemetry.classList.add(...['sp', 'sm']);
+
+        divContact.append(spDate);
+        divContact.append(imType);
+        divContact.append(spHash);
+        divContact.append(spName);
+        divContact.append(spTelemetry);
+
+        let divDetailsType = document.createElement("div");
+        let divDetailsFirst = document.createElement("div");
+        let divDetailsKey = document.createElement("div");
+        let divDetailsTelemetry = document.createElement("div");
+
+        divDetails.append(divDetailsType);
+        divDetails.append(divDetailsFirst);
+        divDetails.append(divDetailsKey);
+        divDetails.append(divDetailsTelemetry);
+
+        divContainer.append(divContact);
+        divContainer.append(divDetails);
 
         this.dom = {
-            container,
-            name,
-            date,
-            hash,
-            icon,
-            details,
-            type,
-            pubkey,
-            first_seen,
-            telemetry,
-            telemetryDetail
+            container: divContainer,
+            contact: divContact,
+            details: divDetails,
+
+            contactDate: spDate,
+            contactHash: spHash,
+            contactName: spName,
+            contactIcon: imType,
+            contactTelemetry: spTelemetry,
+
+            detailsType: divDetailsType,
+            detailsFirst: divDetailsFirst,
+            detailsKey: divDetailsKey,
+            detailsTelemetry: divDetailsTelemetry,
         };
 
-        if (root) root.appendChild(container);
-
-        return container;
+        divContact.instance = this;
+        return this.dom;
     }
 
     addToMap(map) {
@@ -346,6 +303,8 @@ class MeshLogContact extends MeshLogObject {
             iconUrl = 'assets/img/tower.svg';
         } else if (this.isRoom()) {
             iconUrl = 'assets/img/group.svg';
+        } else if (this.isSensor()) {
+            iconUrl = 'assets/img/sensor.svg';
         } else {
             iconUrl = 'assets/img/unknown.svg';
         }
@@ -379,9 +338,9 @@ class MeshLogContact extends MeshLogObject {
         innerIcon.classList.add('marker-icon-img');
 
         if (!this.isClient()) {
-            if (this.adv.isVeryExpired()) {
+            if (this.isVeryExpired()) {
                 icdivch1.classList.add("missing");
-            } else if (this.adv.isExpired()) {
+            } else if (this.isExpired()) {
                 icdivch1.classList.add("ghosted");
             }
         }
@@ -395,18 +354,29 @@ class MeshLogContact extends MeshLogObject {
 
         const self = this;
 
-        let tooltip = `<p class="tooltip-title">${this.adv.data.name}</p><p class="tooltip-detail">Last adv: ${this.adv.data.sent_at}</p>`;
-
         this.marker = L.marker([this.adv.data.lat, this.adv.data.lon], { icon: icon }).addTo(map);
-        this.marker.bindTooltip(tooltip);
-        this.marker.on('mouseover', (e) => {
-            self.highlight = 'yellow';
-            this.updateDom();
-        });
-        this.marker.on('mouseout', (e) => {
-            self.highlight = '';
-            this.updateDom();
-        });
+        this.updateTooltip();
+    }
+
+    updateTooltip(tooltip = undefined) {
+        if (this.marker) {
+            this.marker.unbindTooltip();
+
+            if (tooltip === undefined) {
+                tooltip = `<p class="tooltip-title">${this.adv.data.name} <span class="tooltip-hash">[${this.hash}]</span></p><p class="tooltip-detail">Last heard: ${this.last.data.created_at}</p>`;
+            }
+
+            if (tooltip) {
+                this.marker.bindTooltip(tooltip);
+            }
+        }
+    }
+
+    __removeEmojis(str) {
+            return str.replace(
+                /([\u200D\uFE0F]|[\u2600-\u27BF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|\uD83E[\uDD00-\uDFFF])/g,
+                ''
+            );
     }
 
     updateDom() {
@@ -415,69 +385,125 @@ class MeshLogContact extends MeshLogObject {
 
         let hashstr = this.data.public_key.substr(0,2);
 
-        if (this.adv.isExpired()) { // 3 days
-            this.dom.date.classList.add("prio-6");
+        this.dom.container.dataset.type = this.adv.data.type;
+        this.dom.container.dataset.time = this.last.time;
+        this.dom.container.dataset.name = this.__removeEmojis(this.adv.data.name).trim();
+        this.dom.container.dataset.hash = hashstr;
+        this.dom.container.dataset.first_seen = new Date(this.data.created_at).getTime();
+
+        this.dom.details.hidden = !this.expanded;
+
+        if (this.isVeryExpired()) { // 3 days
+            this.dom.contactDate.classList.add("prio-6");
+        } else if (this.isExpired()) { // 3 days
+            this.dom.contactDate.classList.add("prio-5");
         } else {
-            this.dom.date.classList.remove("prio-6");
+            this.dom.contactDate.classList.remove("prio-5");
+            this.dom.contactDate.classList.remove("prio-6");
         }
 
         if (this.flags.dupe) {
-            this.dom.hash.classList.add("prio-5");
+            this.dom.contactHash.classList.add("prio-5");
         } if (this.isRepeater()) {
-            this.dom.hash.classList.add("prio-4");
+            this.dom.contactHash.classList.add("prio-4");
         } else {
-            this.dom.hash.classList.remove("prio-4");
-            this.dom.hash.classList.remove("prio-5");
+            this.dom.contactHash.classList.remove("prio-4");
+            this.dom.contactHash.classList.remove("prio-5");
         }
 
-        this.dom.first_seen.innerText = `First Seen: ${this.data.created_at}`;
-        this.dom.pubkey.innerText = `Public Key: ${this.data.public_key}`;
-        this.dom.container.dataset.type = this.adv.data.type;
 
-        if (this.adv.data.type == 1) {
-            this.dom.icon.src = "assets/img/person.svg";
-            this.dom.type.innerText = `Type: Chat`;
-        } else if (this.adv.data.type == 2) {
-            this.dom.icon.src = "assets/img/tower.svg";
-            this.dom.type.innerText = `Type: Repeater`;
-        } else if (this.adv.data.type == 3) {
-            this.dom.icon.src = "assets/img/group.svg";
-            this.dom.type.innerText = `Type: Room`;
+        let type = '';
+        if (this.isClient()) {
+            this.dom.contactIcon.src = "assets/img/person.svg";
+            type = 'Chat';
+        } else if (this.isRepeater()) {
+            this.dom.contactIcon.src = "assets/img/tower.svg";
+            type = 'Repeater';
+        } else if (this.isRoom()) {
+            this.dom.contactIcon.src = "assets/img/group.svg";
+            type = 'Room';
+        }  else if (this.isSensor()) {
+            this.dom.contactIcon.src = "assets/img/sensor.svg";
+            type = 'Sensor';
         } else {
-            this.dom.type.innerText = `Type: Unknown`;
-            this.dom.icon.src = "assets/img/unknown.svg";
+            this.dom.contactIcon.src = "assets/img/unknown.svg";
         }
 
-        this.dom.name.innerText = this.adv.data.name;
-        this.dom.date.innerText = this.adv.data.sent_at;
-        this.dom.hash.innerText = `[${hashstr}]`;
+        this.dom.detailsType.innerHTML = `<span class="detail-name">Type:</span> <span class="detail-value">${type}</span>`;
+        this.dom.detailsFirst.innerHTML = `<span class="detail-name">First Seen:</span> <span class="detail-value">${this.data.created_at}</span>`;
+        this.dom.detailsKey.innerHTML = `<span class="detail-name">Public Key:</span> <span class="detail-value">${this.data.public_key}</span>`;
+
+        this.dom.contactName.innerText = this.adv.data.name;
+        this.dom.contactDate.innerText = this.last.data.created_at;
+        this.dom.contactHash.innerText = `[${hashstr}]`;
 
         if (this.telemetry) {
+            let channels = {};
             for (let i=0;i<this.telemetry.length;i++) {
-                let sensor = this.telemetry[i];
-                if (sensor.type == 116) {
-                    this.dom.telemetry.innerText = `${sensor.value} V`;
+                const sensor = this.telemetry[i];
+
+                if (!channels.hasOwnProperty(sensor.channel)) {
+                    channels[sensor.channel] = {};
                 }
+
+                if (!channels[sensor.channel].hasOwnProperty(sensor.name)) {
+                    channels[sensor.channel][sensor.name] = [];
+                }
+
+                channels[sensor.channel][sensor.name].push(sensor.value);
+            }
+
+            // build detail text
+            let detail = [];
+            let short = '';
+
+            const addMeasurement = (src, dst, key, scale, precision, unit) => {
+                if (!src.hasOwnProperty(key)) return;
+                if (src[key].size < 1) return;
+
+                let val = (src[key][0] / scale).toFixed(precision);
+                let str = `${val}`;
+                if (unit) str += ` ${unit}`;
+                dst.push(str);
+            }
+
+            Object.entries(channels).forEach(([ch,data]) => {
+                let meas = [];
+
+                addMeasurement(data, meas, "voltage", 1, 2, "V");
+                addMeasurement(data, meas, "current", 1, 3, "mA");
+                addMeasurement(data, meas, "temperature", 1, 2,  "°C");
+                addMeasurement(data, meas, "humidity", 2, 1, " %");
+                addMeasurement(data, meas, "pressure", 1, 1, " hPa");
+
+                if (data.hasOwnProperty("voltage")) {
+                    short = `${data["voltage"][0].toFixed(2)} V`;
+                }
+
+                detail.push(meas);
+            });
+
+            const result = detail
+                .filter(arr => arr.length > 0) // remove empty arrays
+                .map((arr, i) => `Ch${i + 1}: ${arr.join(', ')}`) // format each remaining array
+                .join('<br>'); // join lines
+
+            if (result.length > 0) {
+                this.dom.detailsTelemetry.innerHTML = `<span class="detail-name">Telemetry:</span> <span class="detail-value">${result}</span>`;
+                this.dom.contactTelemetry.innerHTML = short;
+
+            } else {
+                this.dom.detailsTelemetry.innerHTML = '';
+                this.dom.contactTelemetry.innerHTML = '';
             }
         }
 
-        const removeEmojis = (str) => {
-            return str.replace(
-                /([\u200D\uFE0F]|[\u2600-\u27BF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|\uD83E[\uDD00-\uDFFF])/g,
-                ''
-            );
-        };
-
         if (this.highlight) {
-            this.dom.name.classList.add("chighlight");
+            this.dom.contactName.classList.add("chighlight");
         } else {
-            this.dom.name.classList.remove("chighlight");
+            this.dom.contactName.classList.remove("chighlight");
         }
 
-        this.dom.container.dataset.time = this.adv.time;
-        this.dom.container.dataset.name = removeEmojis(this.adv.data.name).trim();
-        this.dom.container.dataset.hash = hashstr;
-        this.dom.container.dataset.first_seen = new Date(this.data.created_at).getTime();
     }
 
     updateMarker() {
@@ -501,6 +527,10 @@ class MeshLogContact extends MeshLogObject {
         return this.adv && this.adv.data.type == 3;
     }
 
+    isSensor() {
+        return this.adv && this.adv.data.type == 4;
+    }
+
     isReporter() {
         return this._meshlog.isReporter(this.data.public_key);
     }
@@ -511,308 +541,399 @@ class MeshLogContact extends MeshLogObject {
         let chash = this.data.public_key.substr(0, hash.length);
         return chash.toUpperCase() === hash.toUpperCase();
     }
-}
-
-class MeshLogGroupChild extends MeshLogObject {
-    createDom(root) {
-        if (this.dom) return this.dom.container;
-
-        let container = document.createElement("div");
-        container.classList.add("log-entry");
-        container.style.marginLeft = '4px';
-
-        let date = document.createElement("span");
-        date.classList.add("sp");
-        date.classList.add("c");
-
-        let text = document.createElement("span");
-        text.classList.add("sp");
-
-        let dot = document.createElement("span");
-        dot.classList.add('dot');
-
-        let reporter = this._meshlog.reporters[this.data.reporter_id];
-        if (reporter) {
-            dot.style.background = reporter.data.color;
-        }
-
-        container.appendChild(date);
-        container.appendChild(dot);
-        container.appendChild(text);
-
-        const pathId = `${this.pathTag()}_${this.data.id}`;
-
-        const self = this;
-        container.onmouseover = (e) => {
-            // show path
-            if (self.parent.dom.pin.checked) return;
-            let src = self._meshlog.contacts[self.data.contact_id];
-            let dst = self._meshlog.reporters[self.data.reporter_id];
-            self._meshlog.showPath(pathId, self.data.path, src, dst, this.color);
-        }
-
-        container.onmouseout = (e) => {
-            // hide path
-            if (self.parent.dom.pin.checked) return;
-            self._meshlog.hidePath(pathId, self.data.id);
-        }
-
-        root.appendChild(container);
-        
-        this.dom = {
-            container,
-            date,
-            text
-        };
-        
-        return container;
-    }
-
-    updateDom() {
-        if (!this.dom) return;
-        this.dom.date.innerText = this.data.sent_at;
-        this.dom.text.innerText = this.data.path ? this.data.path : 'direct';
-    }
-
-    pathTag() { return '?'; }
-}
-
-class MeshLogChannelMessage extends MeshLogGroupChild {
-    pathTag() { return 'g'; }
-}
-class MeshLogDirecMessage extends MeshLogGroupChild {
-    pathTag() { return 'd'; }
-}
-class MeshLogAdvertisement extends MeshLogGroupChild {
-    pathTag() { return 'a'; }
 
     isExpired() {
-        let now = new Date();
-        let seen = new Date(this.data.sent_at);
+        if (!this.last) return true;
 
-        let age = now.getTime() - seen.getTime();
-        return age > (3 * 24 * 60 * 60 * 1000);
+        let age = new Date().getTime() - this.last.time;
+        return age > (3 * 24 * 60 * 60 * 1000); // 3 days
     }
 
     isVeryExpired() {
-        let now = new Date();
-        let seen = new Date(this.data.sent_at);
+        if (!this.last) return true;
 
-        let age = now.getTime() - seen.getTime();
-        return age > (7 * 24 * 60 * 60 * 1000);
+        let age = new Date().getTime() - this.last.time;
+        return age > (7 * 24 * 60 * 60 * 1000); // 7 days
     }
 }
 
-class MeshLogMessageGroup extends MeshLogObject {
-    constructor(meshlog, data) {
-        super(meshlog, data);
-        this.messages = {};
+class MeshLogReport {
+    constructor(meshlog, data, contact_id, parent) {
+        this._meshlog = meshlog;
+        this.data = data;
+        this.dom = null;
+        this.contact_id = contact_id;
+        this.polyline = [];
+        this.parent = parent;
     }
 
-    addMessage(msg) {
-        const colors = [
-            "#F44336",
-            "#8E24AA",
-            "#3949AB",
-            "#00897B",
-            "#43A047",
-            "#EF6C00",
-        ];
+    showPath() {
+        let sender = this._meshlog.contacts[this.contact_id] ?? false;
+        let receiver = this._meshlog.reporters[this.data.reporter_id];
+        this._meshlog.showPath(this.data.id, this.data.path, sender, receiver);
+    }
 
-        msg.parent = this;
-        msg.color = colors[msg.data.id % colors.length];
-        this.messages[msg.data.id] = msg;
+    hidePath() {
+        this._meshlog.hidePath(this.data.id);
+    }
 
-        if (this.dom && !msg.dom) { 
-            msg.createDom(this.dom.child);
+    createDom(recreate = false) {
+        if (this.dom && !recreate) return this.dom;
+
+        if (this.dom && this.dom.container && this.dom.container.parentNode) {
+            this.dom.container.parentNode.removeChild(this.dom.container);
+            this.dom = null;
+        }
+
+        let reporter = this._meshlog.reporters[this.data.reporter_id] ?? false;
+        if (!reporter) return null;
+
+        let divReport = document.createElement("div");
+        let spDate = document.createElement("span");
+        let spDot = document.createElement("span");
+        let spPath = document.createElement("span");
+        let spSnr = document.createElement("span");
+
+        divReport.classList.add('log-entry');
+        divReport.instance = this;
+        spDate.classList.add(...['sp', 'c']);
+        spDot.classList.add(...['dot']);
+        spPath.classList.add(...['sp']);
+        spSnr.classList.add(...['sp']);
+
+        spDot.style.background = reporter.data.color;
+
+        spDate.innerText = this.data['created_at'];
+        spPath.innerText = this.data['path'] || "direct";
+        spSnr.innerText = this.data['snr'];
+
+        divReport.append(spDate);
+        divReport.append(spDot);
+        divReport.append(spPath);
+        // divReport.append(spSnr);
+
+        this.dom = {
+            container: divReport
+        }
+
+        return this.dom;
+    }
+
+    static onmouseover(e) {
+        this.showPath();
+        this._meshlog.updatePaths();
+    }
+
+    static onmouseout(e) {
+        if (this.parent.dom.input.show.checked) return;
+        this.hidePath();
+    }
+
+    static oncontextmenu(e) {
+        e.preventDefault();
+
+        this._meshlog.dom_contextmenu
+        const menu = this._meshlog.dom_contextmenu;
+
+        while (menu.hasChildNodes()) {
+            menu.removeChild(menu.lastChild);
+        }
+
+        // get paths
+
+        let trk = '';
+        let wpt = '';
+        Object.entries(this._meshlog.layer_descs).forEach(([k,d]) => {
+            for (const p of d.paths) {
+                if (!trk) trk += `<trkpt lat="${p.from.lat}" lon="${p.from.lon}"></trkpt>\n`;
+                trk += `<trkpt lat="${p.to.lat}" lon="${p.to.lon}"></trkpt>\n`;
+            }
+
+            for (const m of d.markers) {
+                let c = this._meshlog.contacts[m];
+                if (c && c.adv) {
+                    wpt += `<wpt lat="${c.adv.data.lat}" lon="${c.adv.data.lon}"><name>${escapeXml(c.data.name)}</name></wpt>\n`;
+                }
+            }
+        });
+
+        trk = `<trk><trkseg>\n${trk}</trkseg></trk>`;
+
+        let miGpx = document.createElement("div");
+        miGpx.classList.add('menu-item');
+        miGpx.innerText = "Export to GPX";
+        miGpx.onclick = (e) => {
+            let gpxContent = `<?xml version="1.0" encoding="UTF-8"?>\n`;
+            gpxContent += `<gpx version="1.1" creator="Meshlog">\n`;
+
+            gpxContent += wpt;
+            gpxContent += trk;
+            gpxContent += `</gpx>`;
+
+            const blob = new Blob([gpxContent], { type: "application/gpx+xml" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = "location.gpx";
+            a.click();
+        };
+
+        menu.appendChild(miGpx);
+
+        menu.style.display = 'block';
+        menu.style.left = `${e.pageX}px`;
+        menu.style.top = `${e.pageY}px`;
+    }
+}
+
+class MeshLogReportedObject extends MeshLogObject {
+    constructor(meshlog, data) {
+        let reports = data.reports ?? [];
+        delete data.reports;
+
+        super(meshlog, data);
+        this.dom = null;
+        this.expanded = false;
+        this.time = new Date(data.created_at).getTime();
+        this.reports = [];
+
+        for (let i=0; i<reports.length; i++) {
+            let report = reports[i];
+            this.reports.push(new MeshLogReport(meshlog, report, data.contact_id, this));
         }
     }
 
-    createDom(root) {
-        const msg = this.first();
-        if (!msg) return undefined;
+    // Override!
+    getId()   { return `?_${this.data.id}`; }
+    getDate() { return {text: "Not Implemented", classList: []}; } // date - 2025-10-10 10:00:00
+    getTag()  { return {text: "Not Implemented", classList: []}; } // tag  - [PUBLIC] 
+    getName() { return {text: "Not Implemented", classList: []}; } // name - Anrijs
+    getText() { return {text: "Not Implemented", classList: []}; } // text - Hello mesh!
+    isVisible() { return false; }
 
-        if (this.dom) return this.dom.container;
+    getPathTag() { return "unk"; }
 
-        let container = document.createElement("div");
+    createDom(recreate = false) {
+        if (this.dom && !recreate) return this.dom;
 
-        let group = document.createElement("div");
-        group.classList.add("log-entry");
+        if (this.dom && this.dom.container && this.dom.container.parentNode) {
+            this.dom.container.parentNode.removeChild(this.dom.container);
+            this.dom = null;
+        }
 
-        let date = document.createElement("span");
-        date.classList.add("sp");
-        date.classList.add("c");
+        // Containers
+        let divContainer = document.createElement("div");
+        let divLog = document.createElement("div");
+        let divReports = document.createElement("div");
+        divContainer.dataset.time = this.time;
+        divContainer.dataset.type = this.data.type;
 
-        let message = document.createElement("div");
+        divLog.classList = 'log-entry';
+        divLog.instance = this;
+        divReports.classList = 'log-entry-reports';
+        divReports.hidden = true;
 
-        let name = document.createElement("span");
-        name.classList.add("sp");
-        name.classList.add("t");
+        divContainer.append(divLog);
+        divContainer.append(divReports);
 
-        let text = document.createElement("span");
-        text.classList.add("sp");
+        // Lines
+        let divLine1 = document.createElement("div");
+        let divLine2 = document.createElement("div");
+        divLine1.classList.add('log-entry-info');
+        divLine2.classList.add('log-entry-msg');
+        divLog.append(divLine1);
+        divLog.append(divLine2);
 
-        let right = document.createElement("span");
-        right.style.marginLeft= 'auto';
-        right.style.whiteSpace = 'nowrap';
+        // Text values
+        let spDate = document.createElement("span");
+        let spTag = document.createElement("span");
+        let spName = document.createElement("span");
+        let spText = document.createElement("span");
 
-        let count = document.createElement("span");
-        count.classList.add("sp");
+        let date = this.getDate();
+        let tag = this.getTag();
+        let name = this.getName();
+        let text = this.getText();
 
-        let pin = document.createElement("input");
-        pin.type = 'checkbox';
-        right.appendChild(pin);
+        spDate.classList.add(...['sp', 'c']);
+        spDate.classList.add(...date.classList);
+        spDate.innerText = date.text;
 
-        pin.onclick = (e) => {
+        spTag.classList.add(...['sp', 'tag']);
+        spTag.classList.add(...tag.classList);
+        spTag.innerText = tag.text;
+
+        spName.classList.add(...['sp', 't']);
+        spName.classList.add(...name.classList);
+        spName.innerText = name.text;
+
+        spText.classList.add(...['sp']);
+        spText.classList.add(...text.classList);
+        spText.innerHTML = text.text.linkify();
+
+        if (text.text) {
+            // message
+            divLine1.append(spDate);
+            divLine1.append(spTag);
+            divLine2.append(spName);
+            divLine2.append(spText);
+        } else {
+            // advert
+            divLine1.append(spDate);
+            // divLine1.append(spTag);
+            divLine1.append(spName);
+        }
+
+        // Right
+        let inputShow = document.createElement("input");
+        inputShow.type = "checkbox";
+        inputShow.classList.add(...['log-entry-cehckbox']);
+        divLine1.appendChild(inputShow);
+
+        inputShow.onclick = (e) => {
             e.stopPropagation();
         }
 
-        let child = document.createElement("div");
-        child.style.borderLeft = "solid 2px #888";
-        child.style.marginLeft = "2px";
-        child.hidden = true;
-
-        Object.entries(this.messages).forEach(([k,v]) => {
-            v.createDom(child);
-        });
-
-        message.appendChild(name);
-        message.appendChild(text);
-
-        group.appendChild(date);
-        group.appendChild(message);
-        group.appendChild(right);
-        container.appendChild(group);
-        container.appendChild(child);
-
         this.dom = {
-            container,
-            group,
-            name,
-            date,
-            text,
-            right,
-            count,
-            pin,
-            child
+            container: divContainer,
+            log: divLog,
+            reports: divReports,
+            input: {
+                show: inputShow
+            }
         };
 
-        group.onclick = (e) => {
-            child.hidden = !child.hidden;
-        }
-
-        group.onmouseover = (e) => {
-            Object.entries(this.messages).forEach(([k,v]) => {
-                v.dom.container.onmouseover(e);
-            });
-        }
-
-        group.onmouseout = (e) => {
-            Object.entries(this.messages).forEach(([k,v]) => {
-                if (!pin.checked) {
-                    v.dom.container.onmouseout(e);
-                }
-            });
-        }
-
-        let ins = false;
-        container.dataset.time = msg.time;
-        // augšā lielāks ID
-        if (root) {
-            var children = root.children;
-            for (let i=0;i<children.length;i++) {
-                let c = root.children[i];
-                if (c.dataset.time < msg.time) {
-                    root.insertBefore(container, c);
-                    ins = true;
-                    break;
-                }
-            }
-
-            if (!ins) root.appendChild(container);
-        }
-
-        return container;
-    }
-
-    first() {
-        const k = Object.keys(this.messages)[0];
-        return this.messages[k];
-    }
-
-    size() {
-        return Object.keys(this.messages).length;
+        return this.dom;
     }
 
     updateDom() {
-        let msg = this.first();
-        if (!msg) return;
-
-        this.dom.date.innerText = msg.data.sent_at;
-        this.dom.name.innerText = msg.data.name + ": ";
-
-        const sz = this.size();
-        this.dom.count.innerText = `×${sz}`;
-
-        let hidden = false;
-
-        if (msg instanceof MeshLogAdvertisement) {
-            this.dom.text.innerText = "Advert";
-            this.dom.text.style.color = 'gray';
-            hidden = !this._meshlog.settings.types.advertisements;
-        } else if (msg instanceof MeshLogChannelMessage) {
-            this.dom.text.innerText = msg.data.message;
-            this.dom.name.style.color = '#d87dff'
-            this.dom.text.style.color = 'white';
-            hidden = !this._meshlog.settings.types.channel_messages;
-        } else if (msg instanceof MeshLogDirecMessage) {
-            this.dom.text.innerText = msg.data.message;
-            this.dom.text.style.color = 'white';
-            hidden = !this._meshlog.settings.types.direct_messages;
-        } else {
-            console.log("unkn instance");
-            // ????
-        }
-
-        let allvis = Object.keys(this._meshlog.visible_contacts).length < 1;
-        if (allvis || this._meshlog.visible_contacts.hasOwnProperty(msg.data.contact_id)) {
-            this.dom.container.hidden = hidden | false;
-        } else {
-            this.dom.container.hidden = true;
-        }
-
         if (this.highlight) {
-            this.dom.group.classList.add("highlight");
+            this.dom.log.classList.add("highlight");
         } else {
-            this.dom.group.classList.remove("highlight");
+            this.dom.log.classList.remove("highlight");
         }
 
-        Object.entries(this.messages).forEach(([k,v]) => {
-            v.updateDom();
-        })
+        this.dom.container.hidden = !this.isVisible();
+        this.dom.reports.hidden = !this.expanded;
+
+        if (this.expanded) {
+            for (let i=0; i<this.reports.length; i++) {
+                let report = this.reports[i];
+                let dom = report.createDom(false);
+                if (dom) {
+                    this.dom.reports.append(dom.container);
+                }
+            }
+        } else {
+            while (this.dom.reports.firstChild) {
+                this.dom.reports.removeChild(this.dom.reports.firstChild);
+            }
+        }
+    }
+
+    static onclick(e) {
+        this.expanded = !this.expanded;
+        this.updateDom();
+    }
+
+    static onmouseover(e) {
+        // show paths
+        for (let i=0;i<this.reports.length;i++) {
+            this.reports[i].showPath();
+        }
+        this._meshlog.updatePaths();
+    }
+
+    static onmouseout(e) {
+        // hide path
+        if (this.dom.input.show.checked) return;
+        for (let i=0;i<this.reports.length;i++) {
+            this.reports[i].hidePath();
+        }
     }
 }
 
+class MeshLogAdvertisement extends MeshLogReportedObject {
+    getId()   { return `a_${this.data.id}`; }
+    getDate() { return {text: this.data.created_at, classList: []}; }
+    getTag()  { return {text: "ADVERT", classList: []}; }
+    getName() { return {text: this.data.name, classList: []}; }
+    getText() { return {text: "", classList: []}; }
+    getPathTag() { return "ADV"; }
+    isVisible() { return Settings.getBool('messageTypes.advertisements', true); }
+}
+
+class MeshLogChannelMessage extends MeshLogReportedObject {
+    getTag()  {
+        let chid = this.data.channel_id;
+        let ch = this._meshlog.channels[chid] ?? false;
+        let chname = ch ? ch.data.name : `Channel ${chid}`;
+        return {text: `→ ${chname}`, classList: []};
+    }
+
+    getId()   { return `c_${this.data.id}`; }
+    getDate() { return {text: this.data.created_at, classList: []}; }
+    getName() { return {text: `${this.data.name}`, classList: ['t-bright']}; }
+    getText() { return {text: this.data.message, classList: ['t-white']}; }
+    getPathTag() { return "MSG"; }
+    isVisible() {
+        let chid = this.data.channel_id;
+        let ch = this._meshlog.channels[chid] ?? false;
+        if (ch) ch = ch.isEnabled();
+        return Settings.getBool('messageTypes.channel', true) && ch;
+    }
+}
+
+class MeshLogDirectMessage extends MeshLogReportedObject {
+    getTag()  {
+        let text = '→ unknown';
+        if (this.reports.length > 0) {
+            let repid = this.reports[0].data.reporter_id;
+            let reporter = this._meshlog.reporters[repid] ?? false;
+            if (reporter) {
+                text = `→ ${reporter.data.name}`;
+            }
+        }
+        return {text: text, classList: []};
+    }
+
+    getId()   { return `d_${this.data.id}`; }
+    getDate() { return {text: this.data.created_at, classList: []}; }
+    getName() { return {text: `${this.data.name}`, classList: ['t-bright']}; }
+    getText() { return {text: this.data.message, classList: ['t-white']}; }
+    getPathTag() { return "DIR"; }
+    isVisible() { return Settings.getBool('messageTypes.direct', false); }
+}
+
+class MeshLogLinkLayer {
+    constructor(from, to, reporter, circle) {
+        this.from = from;
+        this.to = to;
+        this.reporter = reporter;
+        this.circle = circle;
+    }
+}
+
+
 class MeshLog {
-    constructor(map, logsid, contactsid, stypesid, sreportersid, scontactsid, warningid, errorid) {
+    constructor(map, logsid, contactsid, stypesid, sreportersid, scontactsid, warningid, errorid, contextmenuid) {
         this.reporters = {};
         this.contacts = {};
-        this.advertisements = {};
         this.channels = {};
-        this.channel_messages = {};
-        this.direct_messages = {};
 
         this.messages = {};
 
         this.map = map;
-        this.map_layers = {};
-        this.visible_markers = [];
+        this.layer_descs = {};
+        this.link_layers = L.layerGroup([]);
+        this.visible_markers = new Set();
         this.visible_contacts = {};
-        this.link_pairs = {};
+        this.links = {};
         this.dom_logs = document.getElementById(logsid);
         this.dom_contacts = document.getElementById(contactsid);
         this.dom_warning = document.getElementById(warningid);
         this.dom_error = document.getElementById(errorid);
+        this.dom_contextmenu = document.getElementById(contextmenuid);
         this.timer = false;
         this.autorefresh = 0;
 
@@ -834,46 +955,73 @@ class MeshLog {
          };
          
 
-        // Settings objects
-        this.settings = {
-            types: {
-                advertisements: true,
-                channel_messages: true,
-                direct_messages: false,
-            },
-            contactTypes: {
-                repeaters: true,
-                clients: true,
-                rooms: true,
-            },
-            reporters: {
-
-            },
-            contacts: {
-
-            }
-        }
-
         this.dom_settings_types = document.getElementById(stypesid);
         this.dom_settings_reporters = document.getElementById(sreportersid);
         this.dom_settings_contacts = document.getElementById(scontactsid);
+
+        this.dom_contacts.addEventListener('click', this.handleMouseEvent);
+        this.dom_contacts.addEventListener('mouseover', this.handleMouseEvent);
+        this.dom_contacts.addEventListener('mouseout', this.handleMouseEvent);
+        this.dom_contacts.addEventListener("contextmenu", this.handleMouseEvent);
+
+        this.dom_logs.addEventListener('click', this.handleMouseEvent);
+        this.dom_logs.addEventListener('mouseover', this.handleMouseEvent);
+        this.dom_logs.addEventListener('mouseout', this.handleMouseEvent);
+        this.dom_logs.addEventListener("contextmenu", this.handleMouseEvent);
+
+        const menu = this.dom_contextmenu;
+        document.addEventListener('click', function () {
+            menu.style.display = 'none'; // Hide when clicking anywhere
+        });
 
         this.__init_message_types();
         this.__init_contact_order();
         this.__init_contact_types();
 
+        this.link_layers.addTo(this.map);
+
         this.last = '2025-01-01 00:00:00';
     }
 
-    __createCb(label, img, checked, onchange) {
+    handleMouseEvent(e) {
+        const el = e.target.closest('.log-entry');
+        if (!el) return;
+
+        const instance = el.instance;
+        if (!instance) return;
+
+        const cls = instance.constructor;
+
+        switch (e.type) {
+            case 'click':
+                if (cls.onclick) cls.onclick.call(instance, e);
+                break;
+            case 'mouseover':
+                if (cls.onmouseover) cls.onmouseover.call(instance, e);
+                break;
+            case 'mouseout':
+                if (cls.onmouseout) cls.onmouseout.call(instance, e);
+                break;
+            case 'contextmenu':
+                if (cls.oncontextmenu) cls.oncontextmenu.call(instance, e);
+                break;
+        }
+    };
+
+    __createCb(label, img, key, def, onchange) {
         let div = document.createElement("div");
         let cb = document.createElement("input");
         let lbl = document.createElement("label");
         let ico = document.createElement("img");
 
         cb.type = "checkbox";
-        cb.checked = checked;
-        cb.onchange = onchange;
+        cb.checked = Settings.getBool(key, def);
+        console.log('create cb: ', key, cb.checked);
+        cb.onchange = (e) => {
+            Settings.set(key, e.target.checked);
+            localStorage[key] = e.target.checked;
+            onchange(e);
+        };
 
         lbl.innerText = label;
 
@@ -891,14 +1039,26 @@ class MeshLog {
         return div;
     }
 
-    __onTypesChanged() {
-        console.log(this.settings.types);
-        this.update();
+    __createInput(name, key, def, onchange) {
+        let div = document.createElement("div");
+        let inp = document.createElement("input");
+
+        inp.type = "text";
+        inp.value = localStorage[key] ?? def;
+        inp.oninput = (e) => {
+            localStorage[key] = e.target.value;
+            onchange(e);
+        };
+        inp.placeholder = name;
+
+        div.classList.add("settings-input");
+        div.appendChild(inp);
+
+        return div;
     }
 
-    __onReportersChanged() {
-        console.log(this.reporters);
-        //this.updateReporters();
+    __onTypesChanged() {
+        this.updateMessagesDom();
     }
 
     sortContacts(fn=undefined, reverse=false) {
@@ -913,9 +1073,20 @@ class MeshLog {
         items.forEach(item => {
             let type = parseInt(item.dataset.type);
             let hidden = false;;
-            if (type == 1 && !this.settings.contactTypes.clients) { hidden = true; }
-            else if (type == 2 && !this.settings.contactTypes.repeaters) { hidden = true; }
-            else if (type == 3 && !this.settings.contactTypes.rooms) { hidden = true; }
+            if (type == 1 && !Settings.getBool('contactTypes.clients', true)) { hidden = true; }
+            else if (type == 2 && !Settings.getBool('contactTypes.repeaters', true)) { hidden = true; }
+            else if (type == 3 && !Settings.getBool('contactTypes.rooms', true)) { hidden = true; }
+            else if (type == 4 && !Settings.getBool('contactTypes.sensors', true)) { hidden = true; }
+
+            if (!hidden) {
+                let filter = Settings.get('contactFilter.value', '').trim().toLowerCase();
+                if (filter) {
+                    let cmp1 = item.dataset.name.toLowerCase().includes(filter);
+                    let cmp2 = item.dataset.hash.toLowerCase().includes(filter);
+                    hidden = !cmp1 && !cmp2;
+                }
+            }
+
             item.hidden = hidden;
             this.dom_contacts.appendChild(item)
         });
@@ -924,7 +1095,7 @@ class MeshLog {
     __init_contact_order() {
         let orders = [
             {
-                name: 'Last Advert',
+                name: 'Last Heard',
                 fn: (a, b) => { 
                     return (Number(b.dataset.time) - Number(a.dataset.time));
                 }
@@ -1001,9 +1172,9 @@ class MeshLog {
             this.__createCb(
                 "",
                 "assets/img/tower.svg",
-                this.settings.contactTypes.repeaters,
+                'contactTypes.repeaters',
+                true,
                 (e) => {
-                    this.settings.contactTypes.repeaters = e.target.checked;
                     self.sortContacts();
                 }
             )
@@ -1012,9 +1183,9 @@ class MeshLog {
             this.__createCb(
                 "",
                 "assets/img/person.svg",
-                this.settings.contactTypes.clients,
+                'contactTypes.clients',
+                true,
                 (e) => {
-                    this.settings.contactTypes.clients = e.target.checked;
                     self.sortContacts();
                 }
             )
@@ -1023,9 +1194,30 @@ class MeshLog {
             this.__createCb(
                 "",
                 "assets/img/group.svg",
-                this.settings.contactTypes.rooms,
+                'contactTypes.rooms',
+                true,
                 (e) => {
-                    this.settings.contactTypes.rooms = e.target.checked;
+                    self.sortContacts();
+                }
+            )
+        );
+        this.dom_settings_contacts.appendChild(
+            this.__createCb(
+                "",
+                "assets/img/sensor.svg",
+                'contactTypes.sensors',
+                true,
+                (e) => {
+                    self.sortContacts();
+                }
+            )
+        );
+        this.dom_settings_contacts.appendChild(
+            this.__createInput(
+                "Filter by Name or Hash/Key",
+                'contactFilter.value',
+                '',
+                (e) => {
                     self.sortContacts();
                 }
             )
@@ -1038,10 +1230,10 @@ class MeshLog {
             this.__createCb(
                 "Advertisements",
                 "assets/img/beacon.png",
-                this.settings.types.advertisements,
+                'messageTypes.advertisements',
+                true,
                 (e) => {
-                    this.settings.types.advertisements = e.target.checked;
-                    self.__onTypesChanged(e);
+                    self.__onTypesChanged();
                 }
             )
         );
@@ -1050,10 +1242,10 @@ class MeshLog {
             this.__createCb(
                 "Channel Messages",
                 "assets/img/message.png",
-                this.settings.types.channel_messages,
+                'messageTypes.channel',
+                true,
                 (e) => {
-                    this.settings.types.channel_messages = e.target.checked;
-                    self.__onTypesChanged(e);
+                    self.__onTypesChanged();
                 }
             )
         );
@@ -1062,23 +1254,21 @@ class MeshLog {
             this.__createCb(
                 "Direct Messages",
                 "assets/img/message.png",
-                this.settings.types.direct_messages,
+                'messageTypes.direct',
+                false,
                 (e) => {
-                    this.settings.types.direct_messages = e.target.checked;
-                    self.__onTypesChanged(e);
+                    self.__onTypesChanged();
                 }
             )
         );
 
-        this.settings.notifications = false;
         this.dom_settings_types.append(
             this.__createCb(
                 "🐐",
                 "",
-                this.settings.notifications,
-                (e) => {
-                    this.settings.notifications = e.target.checked;
-                }
+                'notifications.enabled',
+                false,
+                (e) => { }
             )
         );
     }
@@ -1092,27 +1282,7 @@ class MeshLog {
             const self = this;
             this.reporters[id].enabled = true;
             this.dom_settings_reporters.hidden = true;
-            // this.reporters[id].dom = this.dom_settings_reporters.appendChild(
-            //     this.__createCb(
-            //         this.reporters[id].data.name,
-            //         false,
-            //         this.reporters[id].enabled,
-            //         (e) => {
-            //             self.reporters[id].enabled = e.target.checked;
-            //             self.__onReportersChanged(e)
-            //         }
-            //     )
-            // );
         });
-    }
-
-    __init_contacts() {
-        // Add sorters:
-        //   By Date
-        //   By Name
-        // Add Display settings:
-        //   Show names
-        // Add some filters?
     }
 
     __addObject(dataset, id, obj) {
@@ -1121,12 +1291,6 @@ class MeshLog {
         } else {
             dataset[id] = obj;
         }
-    }
-
-    __formatedTimestamp(d=new Date()) {
-        const date = d.toISOString().split('T')[0];
-        const time = d.toTimeString().split(' ')[0];
-        return `${date} ${time}`
     }
 
     __prepareQuery(params={}) {
@@ -1235,19 +1399,14 @@ class MeshLog {
         let oldest_grp = this.latest;
         let oldest_dm  = this.latest;
 
-        Object.entries(this.advertisements).forEach(([k,v]) => {
-            let created_at = new Date(v.data.created_at).getTime();
-            oldest_adv = Math.min(oldest_adv, created_at);
-        });
-
-        Object.entries(this.channel_messages).forEach(([k,v]) => {
-            let created_at = new Date(v.data.created_at).getTime();
-            oldest_grp = Math.min(oldest_grp, created_at);
-        });
-
-        Object.entries(this.direct_messages).forEach(([k,v]) => {
-            let created_at = new Date(v.data.created_at).getTime();
-            oldest_dm = Math.min(oldest_dm, created_at);
+        Object.entries(this.messages).forEach(([k,v]) => {
+            if (v instanceof MeshLogAdvertisement) {
+                if (v.time < oldest_adv) oldest_adv = v.time;
+            } else if (v instanceof MeshLogChannelMessage) {
+                if (v.time < oldest_grp) oldest_adv = v.time;
+            } else if (v instanceof MeshLogDirectMessage) {
+                if (v.time < oldest_dm) oldest_adv = v.time;
+            }
         });
 
         this.__fetchQuery({ "before_ms": oldest_adv }, 'api/v1/advertisements', data => {
@@ -1265,7 +1424,7 @@ class MeshLog {
         });
 
         this.__fetchQuery({ "before_ms": oldest_dm }, 'api/v1/direct_messages', data => {
-            const rep = self.__loadObjects(self.direct_messages, data, MeshLogDirecMessage);
+            const rep = self.__loadObjects(self.direct_messages, data, MeshLogDirectMessage);
             if (rep.length) console.log(`${rep.length} direct messages loaded`);
             self.onLoadAll();
             if (onload) onload();
@@ -1283,9 +1442,9 @@ class MeshLog {
             const rep2 = this.__loadObjects(this.contacts, data.contacts, MeshLogContact);
             const rep4 = this.__loadObjects(this.channels, data.channels, MeshLogChannel);
 
-            const rep3 = this.__loadObjects(this.advertisements, data.advertisements, MeshLogAdvertisement);
-            const rep5 = this.__loadObjects(this.channel_messages, data.channel_messages, MeshLogChannelMessage);
-            const rep6 = this.__loadObjects(this.direct_messages, data.direct_messages, MeshLogDirecMessage);
+            const rep3 = this.__loadObjects(this.messages, data.advertisements, MeshLogAdvertisement);
+            const rep5 = this.__loadObjects(this.messages, data.channel_messages, MeshLogChannelMessage);
+            const rep6 = this.__loadObjects(this.messages, data.direct_messages, MeshLogDirectMessage);
 
             if (rep1.length) console.log(`${rep1.length} reporters loaded`);
             if (rep2.length) console.log(`${rep2.length} contacts loaded`);
@@ -1311,86 +1470,110 @@ class MeshLog {
     }
 
     onLoadContacts() {
-        let hashes = {};
+        let repHashes = {};
         Object.entries(this.contacts).forEach(([id,contact]) => {
-            let adv = Object.values(this.advertisements).reverse().find(item => item.data.contact_id == id);
-
-            if (!adv && contact.data.advertisement) {
-                adv = new MeshLogAdvertisement(this, contact.data.advertisement);
+            if (contact.isRepeater()) {
+                let hashstr = contact.data.public_key.substr(0,2);
+                if (!repHashes.hasOwnProperty(hashstr)) {
+                    repHashes[hashstr] = 1;
+                } else {
+                    repHashes[hashstr] += 1;
+                }
             }
-            
-            if (!adv) return;
+        });
 
-            contact.adv = adv;
-            contact.telemetry = contact.data.telemetry ?? false;
-
-            let hashstr = contact.data.public_key.substr(0,2);
+        Object.entries(this.contacts).forEach(([id,contact]) => {
+            let latest = contact.last;
+            if (!latest) return;
 
             // Mark dupes
-            if (hashes.hasOwnProperty(hashstr) && contact.isRepeater()) {
-                for (let i=0;i<hashes[hashstr].length;i++) {
-                    hashes[hashstr][i].flags.dupe = true;
-                    hashes[hashstr][i].updateDom();
-                }
-                contact.flags.dupe = true;
-            } else {
-                hashes[hashstr] = [];
+            if (contact.isRepeater()) {
+                let hashstr = contact.data.public_key.substr(0,2);
+                let count = repHashes[hashstr];
+                contact.flags.dupe = count > 1;
             }
-            hashes[hashstr].push(contact);
 
-            contact.createDom(this.dom_contacts);
+            this.addContact(contact);
             contact.addToMap(this.map);
-            contact.update();
         });
-        this.sortContacts();
+        this.updateContactsDom();
+    }
+
+    onLoadChannels() {
+        Object.entries(this.channels).forEach(([id,channel]) => {
+            this.addChannel(channel);
+        });
+    }
+
+    addChannel(ch) {
+        let isnew = ch.dom ? false : true;
+        let dom = ch.createDom();
+        ch.updateDom();
+        if (isnew) {
+            this.dom_settings_reporters.appendChild(dom.cb);
+        }
     }
 
     addMessage(msg) {
-        // identified by date + hash
-        const hash = msg.data.hash;
-        if (!this.messages.hasOwnProperty(hash)) {
-            this.onNewMessage(msg);
-            this.messages[hash] = new MeshLogMessageGroup(this, {
-                sent_at: msg.data.sent_at,
-                created_at: msg.data.created_at, // this will be different for each message, but it helps for
-            });
-        }
-        this.messages[hash].addMessage(msg);
+        let isnew = msg.dom ? false : true;
+        let dom = msg.createDom();
+        msg.updateDom();
 
-        let contact = this.contacts[msg.data.contact_id];
-        if (contact) this.contacts[msg.data.contact_id].addMessage(this.messages[hash]);
-    }
-
-    findContactByHash(hash) {
-        let pk = hash.length > 4;
-        for (const [_, contact] of Object.entries(this.contacts)) {
-            if (pk && contact.data.public_key == hash) {
-                return contact;
-            } else if (contact.hash == hash) {
-                return contact;
+        if (isnew) {
+            // find pos by date
+            let inserted = false;
+            let newTime = dom.container.dataset.time;
+            for (let child of this.dom_logs.children) {
+                const childTime = child.dataset.time;
+                if (newTime > childTime) {
+                    this.dom_logs.insertBefore(dom.container, child);
+                    inserted = true;
+                    break;
+                }
             }
+
+            // If not inserted, append at the end
+            if (!inserted) this.dom_logs.appendChild(dom.container);
+
+            if (this.contacts.hasOwnProperty(msg.data.contact_id)) {
+                let contact = this.contacts[msg.data.contact_id];
+                if (!contact.last || msg.time > contact.last.time) {
+                    contact.last = msg;
+                    if (msg instanceof MeshLogAdvertisement) {
+                        contact.adv = msg;
+                    }
+                }
+            }
+            this.onNewMessage(msg);
         }
-        return undefined;
     }
 
-    update() {
+    addContact(msg) {
+        let dom = msg.createDom();
+        msg.updateDom();
+        this.dom_contacts.appendChild(dom.container);
+    }
+
+    updateContactsDom() {
+        this.sortContacts();
+    }
+
+    updateMessagesDom() {
         for (const [key, msg] of Object.entries(this.messages)) {
-            msg.createDom(this.dom_logs);
-            msg.update();
+            msg.createDom(false);
+            msg.updateDom();
         }
     }
 
     onLoadMessages() {
-        Object.entries(this.advertisements).forEach(([id,_]) => { this.addMessage(this.advertisements[id]); });
-        Object.entries(this.channel_messages).forEach(([id,_]) => { this.addMessage(this.channel_messages[id]); });
-        Object.entries(this.direct_messages).forEach(([id,_]) => { this.addMessage(this.direct_messages[id]); });
-
-        this.update();
+        Object.entries(this.messages).forEach(([id, msg]) => { this.addMessage(msg); });
+        this.updateMessagesDom();
     }
 
     onLoadAll() {
-        this.onLoadContacts();
         this.onLoadMessages();
+        this.onLoadContacts();
+        this.onLoadChannels();
     }
 
     loadReporters(params={}, onload=null) {
@@ -1435,22 +1618,24 @@ class MeshLog {
 
     loadDirectMessages(params={}, onload=null) {
         this.__fetchQuery(params, 'api/v1/direct_messages', data => {
-            const sz = this.__loadObjects(this.direct_messages, data, MeshLogDirecMessage);
+            const sz = this.__loadObjects(this.direct_messages, data, MeshLogDirectMessage);
             console.log(`${sz} direct messages loaded`);
             if (onload) onload();
         });
     }
 
     fadeMarkers(opacity=0.2) {
-        const empty = this.visible_markers.length == 0; 
+        const empty = this.visible_markers.size < 1;
         Object.entries(this.contacts).forEach(([k,v]) => {
             if (!v.marker) return;
-            if (empty || this.visible_markers.includes(v.marker)) {
+            if (empty || this.visible_markers.has(v.data.id)) {
                 v.marker.setOpacity(1);
                 v.marker.setZIndexOffset(1000);
+                v.updateTooltip();
             } else {
                 v.marker.setOpacity(opacity);
                 v.marker.setZIndexOffset(2);
+                v.updateTooltip('');
             }
         });
     }
@@ -1461,7 +1646,7 @@ class MeshLog {
         let matchDist = 99999;
 
         Object.entries(this.contacts).forEach(([k,c]) => {
-            if (c.checkHash(hash) && c.adv && !c.adv.isVeryExpired() && (!repeater || c.isRepeater())) {
+            if (c.checkHash(hash) && c.adv && !c.isVeryExpired() && (!repeater || c.isRepeater())) {
                 let current = [c.adv.data.lat, c.adv.data.lon];
                 if (current[0] == 0 && current[1] == 0) return;
 
@@ -1484,32 +1669,129 @@ class MeshLog {
         };
     }
 
-    showPath(id, path, src, dst, color) {
-        if (this.map_layers.hasOwnProperty(id)) return;
-
-        // TODO: generate "link" pairs. If same node pair exists, place new layer under and with larger radius
-
-        let layers = [];
-        let start = [];
-        let hashes = path ? path.split(',') : [];
-
-        // Show end/dst on map. Sould be logger
-        Object.entries(this.contacts).forEach(([k,v]) => {
-            if (v.data.public_key == dst.data.public_key) {
-                if (v.marker) {
-                    this.visible_markers.push(v.marker);
-                    this.map.removeLayer(v.marker);
-                    v.marker.addTo(this.map);
-                }
-            }
+    updatePaths() {
+        // remove all layers
+        const self = this;
+        this.link_layers.eachLayer(function (layer) {
+            self.link_layers.removeLayer(layer);
         });
+
+        this.visible_markers.clear();
+
+        // temp, dupe prevention
+        let links = [];
+        let circles = [];
+        let decors = {};
+        let warnings = [];
 
         const ln_weight = 2;
         const ln_outline = 4;
-        const ln_offset = 3;
-        const ln_max_offets = 6;
+        const ln_decor_weight = 3;
+        const ln_decor_outline = 5;
+        const ln_offset = 8;
+        const ln_repeat = 150;
 
-        let prev = [dst.data.lat, dst.data.lon];
+        const linkColor =  '#555';
+        const linkStrokeColor = '#fff';
+
+        Object.entries(this.layer_descs).forEach(([k,desc]) => {
+            for (const cid of desc.markers) {
+                this.visible_markers.add(cid);
+            }
+
+            for (let i=0;i<desc.paths.length;i++) {
+                let path = desc.paths[i];
+                let line_uid = [path.from.contact_id, path.to.contact_id].join('_');
+                let line_id = [path.from.contact_id, path.to.contact_id].sort((a, b) => a - b).join('_');
+                let decor_id = `${path.reporter.data.id}`;
+                let circle_id = `${path.to.contact_id}`;
+
+                let linePath = [
+                    [path.to.lat, path.to.lon],
+                    [path.from.lat, path.from.lon]
+                ];
+
+                let line1 = L.polyline(linePath, {color: linkStrokeColor, weight: ln_outline});
+                let line2 = L.polyline(linePath, {color: linkColor, weight: ln_weight});
+
+                if (!links.includes(line_id)) {
+                    links.push(line_id);
+                    line1.addTo(this.link_layers);
+                    line2.addTo(this.link_layers);
+                }
+
+                // Circle
+                if (path.circle && !circles.includes(circle_id)) {
+                    circles.push(circle_id);
+
+                    let r = 1000;
+                    let op = .2;
+
+                    let circle = L.circle(linePath[0], {
+                        color: linkColor,
+                        fillColor: linkColor,
+                        fillOpacity: op,
+                        radius: r
+                    });
+                    circle.addTo(this.link_layers);
+                }
+
+                // Decoratinos
+                if (!decors.hasOwnProperty(line_uid)) {
+                    decors[line_uid] = [];
+                }
+
+                if (!decors[line_uid].includes(decor_id)) {
+                    const offset = ln_offset * decors[line_uid].length; // TODO - should increase per 
+                    decors[line_uid].push(decor_id);
+
+                    const decorator1 = L.polylineDecorator(line1, {
+                        patterns: [
+                        {
+                            offset: offset,
+                            repeat: ln_repeat,
+                            symbol: L.Symbol.arrowHead({
+                                pixelSize: 10,
+                                polygon: false,
+                                pathOptions: { stroke: true, color: linkStrokeColor, weight: ln_decor_outline }
+                            })
+                        },
+                        {
+                            offset: offset,
+                            repeat: ln_repeat,
+                            symbol: L.Symbol.arrowHead({
+                                pixelSize: 10,
+                                polygon: false,
+                                pathOptions: { stroke: true, color: path.reporter.data.color, weight: ln_decor_weight }
+                            })
+                        }
+                    ]
+                    });
+
+                    decorator1.addTo(this.link_layers);
+                }
+
+                // Markers
+                this.visible_markers;
+            }
+            warnings = [...warnings, ...desc.warnings];
+        });
+        warnings = [...new Set(warnings)];
+        this.showWarning(warnings.join("\n"));
+        this.fadeMarkers();
+    }
+
+    // Only adds descriptors, not layers
+    showPath(id, path, src, reporter) {
+        if (this.layer_descs.hasOwnProperty(id)) return;
+
+        let hashes = path ? path.split(',') : [];
+        let prev = {
+            lat: reporter.data.lat,
+            lon: reporter.data.lon,
+            contact_id: reporter.getContactId()
+        };
+
         let addCircle = false;
 
         if (src && !src.isClient()) {
@@ -1518,93 +1800,42 @@ class MeshLog {
             addCircle = true;
         }
 
-        let warnings = [];
+        let desc = {
+            paths: [],
+            markers: new Set(),
+            warnings: []
+        }
+
         for (let i=hashes.length-1;i>=0;i--) {
             let hash = hashes[i];
-            let nearest = this.findNearestContact(prev[0], prev[1], hash, true);
+            let nearest = this.findNearestContact(prev.lat, prev.lon, hash, true);
 
             // Valid repeater found?
             if (nearest) {
                 if (nearest.matches > 1) {
-                    warnings.push(`Multiple paths (${nearest.matches}) detected to ${hash}. Showing shortest.`);
+                    desc.warnings.push(`Multiple paths (${nearest.matches}) detected to ${hash}. Showing shortest.`);
                 }
 
-                this.visible_markers.push(nearest.result.marker);
-                this.map.removeLayer(nearest.result.marker);
-                nearest.result.marker.addTo(this.map);
-                let current = [nearest.result.adv.data.lat, nearest.result.adv.data.lon];
-                let pair_id = `${prev[0]}-${prev[1]}_${current[0]}-${current[1]}`;
-
-                if (!this.link_pairs.hasOwnProperty(pair_id)) {
-                    this.link_pairs[pair_id] = 0;
-                }
-
-                let offset = Math.floor((this.link_pairs[pair_id] + 1) / 2) * ln_offset;
-                if (offset > ln_max_offets) offset = 0;
-                offset *= this.link_pairs[pair_id] % 2 == 0 ? 1 : -1;
-
-
-                this.link_pairs[pair_id]++;
-
-                layers.push(L.polyline([
-                    prev,
-                    current
-                ], {color: 'white', weight: ln_outline, offset: offset}));
-
-                layers.push(L.polyline([
-                    prev,
-                    current
-                ], {color: color, weight: ln_weight, offset: offset}));
-
-                prev = [nearest.result.adv.data.lat, nearest.result.adv.data.lon];
-            }
-        }
-        this.showWarning(warnings.join("\n"));
-
-        if (addCircle) {
-            let pair_id = `c_${prev[0]}-${prev[1]}`;
-            let r = 1000;
-            let op = .2
-
-            if (!this.link_pairs.hasOwnProperty(pair_id)) {
-                this.link_pairs[pair_id] = 0;
+                let current = {
+                    lat: nearest.result.adv.data.lat,
+                    lon: nearest.result.adv.data.lon,
+                    contact_id: nearest.result.data.id
+                };
+                desc.markers.add(nearest.result.data.id);
+                desc.paths.push(new MeshLogLinkLayer(prev, current, reporter, addCircle && i == 0));
+                prev = current;
             } else {
-                r -= this.link_pairs[pair_id] * 40;
-                this.link_pairs[pair_id]++;
-                op = 0;
+                console.log('no nearest: ');
             }
-
-            let circle = L.circle(prev, {
-                color: color,
-                fillColor: color,
-                fillOpacity: op,
-                radius: r
-            });
-            layers.push(circle);
         }
 
-        let group = L.layerGroup(layers).addTo(this.map);
-        this.map_layers[id] = group;
-        this.fadeMarkers();
+        this.layer_descs[id] = desc;
     }
 
     hidePath(id) {
-        if (!this.map_layers.hasOwnProperty(id)) return;
-        this.map.removeLayer(this.map_layers[id]);
-        delete this.map_layers[id];
-        this.visible_markers = [];
-        this.link_pairs = {};
-        this.fadeMarkers();
-        this.showWarning('');
-    }
-
-    clearHighlights() {
-        Object.entries(this.messages).forEach(([_,grp]) => {
-            grp.highlight = false;
-            Object.entries(grp.messages).forEach(([_,msg]) => {
-                msg.highlight = false;
-            });
-        });
+        if (!this.layer_descs.hasOwnProperty(id)) return;
+        delete this.layer_descs[id];
+        this.updatePaths();
     }
 
     refresh() {
@@ -1613,7 +1844,7 @@ class MeshLog {
         this.loadNew((data) => {
             const count = Object.keys(this.new_messages).length;
             if (count) {
-                if (this.settings.notifications) {
+                if (Settings.getBool('notifications.enabled', false)) {
                     new Audio('assets/audio/notif.mp3').play();
                 }
 
@@ -1641,7 +1872,7 @@ class MeshLog {
     }
 
     onNewMessage(msg) {
-        if (msg instanceof MeshLogChannelMessage || msg instanceof MeshLogDirecMessage) {
+        if (msg instanceof MeshLogChannelMessage || msg instanceof MeshLogDirectMessage) {
             const hash = msg.data.hash;
             if (!this.new_messages.hasOwnProperty(hash)) {
                 this.new_messages[hash] = [];
@@ -1654,12 +1885,6 @@ class MeshLog {
         this.new_messages = [];
         document.getElementById('favicon').setAttribute('href','assets/favicon/faviconw.ico');
         document.title = `MeshCore Log`; 
-    }
-
-    showAllPaths() {
-        Object.entries(this.messages).forEach(([k,v]) => {
-            v.dom.group.onmouseover({});
-        });
     }
 
     isReporter(public_key) {
@@ -1685,4 +1910,13 @@ function haversineDistance(lat1, lon1, lat2, lon2) {
 
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return R * c; // Distance in km
+}
+
+function escapeXml(str) {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
 }

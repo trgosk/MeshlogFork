@@ -11,9 +11,16 @@
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
         crossorigin=""></script>
     <script src=" https://cdn.jsdelivr.net/npm/leaflet-polylineoffset@1.1.1/leaflet.polylineoffset.min.js "></script>
+    <script src="https://cdn.jsdelivr.net/npm/linkifyjs@4.3.2/dist/linkify.min.js"
+        integrity="sha256-3RgHec0J2nciPAIndkHOdN/WMH98UhLzLRsf+2MOiiY="
+        crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/linkify-string@4.3.2/dist/linkify-string.min.js"
+        integrity="sha256-b6wRq6tXNDnatickDjAMTffu2ZO2lsaV5Aivm+oh2s4="
+        crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/leaflet-polylinedecorator@1.6.0/dist/leaflet.polylineDecorator.min.js"></script>
     <script src="assets/js/meshlog.js"></script>
     <link rel="stylesheet" href="assets/css/style.css">
-    <title>MeshCore Log v1.99</title>
+    <title>MeshCore Log v1.99.1</title>
 </head>
 <body>
 
@@ -38,8 +45,14 @@
     <div class="settings" id="about">MeshLog Web v1.99</div>
     <div id="contacts"></div>
 </div>
+
+<div id="context-menu" class="menu">
+</div>
 </div>
 <script>
+
+// Setup linkifyjs default options (default to ouse page)
+linkify.options.defaults = {...linkify.options.defaults, defaultProtocol: "https", target: "_blank"}
 
 // resize bars
 
@@ -210,7 +223,8 @@ var meshlog = new MeshLog(
     "settings-reporters",
     "settings-contacts",
     "warning",
-    "error"
+    "error",
+    "context-menu",
 );
 meshlog.loadAll();
 meshlog.setAutorefresh(10000);

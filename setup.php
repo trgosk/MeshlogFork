@@ -1,5 +1,21 @@
 <?php
     include 'lib/meshlog.class.php';
+    include 'lib/migration.class.php';
+
+    include 'migrations/000_initial_setup.php';
+    include 'migrations/001_add_admin_and_settings.php';
+    include 'migrations/002_add_telemetry.php';
+    include 'migrations/003_add_reports.php';
+    include 'migrations/004_add_raw_packets.php';
+
+    // Must be in order!
+    $migrationClasses = array(
+        'Migration_000',
+        'Migration_001',
+        'Migration_002',
+        'Migration_003',
+        'Migration_004',
+    );
 
     session_start();
 
@@ -47,7 +63,9 @@
     $hasMigrated = true;
     $pdo = null;
     $meshlog = null;
+    $current_version = -1;
     $migrations = array();
+    $destructives = array();
 
     if (file_exists("config.php")) {
         require_once "config.php";
@@ -71,7 +89,6 @@
             
             $hasConfig = true;
 
-            $current = -1;
             $table = MeshLogSetting::getTable();
             $stmt = $pdo->prepare("SELECT COUNT(*) 
                 FROM information_schema.tables 
@@ -82,19 +99,17 @@
             if ($stmt->fetchColumn() > 0) {
                 // Table exists
                 $meshlog = new MeshLog($config['db']);
-                $current = $meshlog->getDbVersion();
+                $current_version = $meshlog->getDbVersion();
             }
 
+            foreach ($migrationClasses as $migrationClass) {
+                $migration = new $migrationClass();
+                if ($migration->isPending($current_version)) {
+                    $migrations[] = $migration;
+                    $hasMigrated = false;
 
-            // Check migrations.
-            foreach (scandir("migrations") as $m) {
-                if (str_ends_with($m, ".sql")) {
-                    $parts = explode("_", $m);
-                    $num = intval($parts[0]);
-                    if ($num > $current) {
-                        $migrations[$num] = $m;
-                        $hasMigrated = false;
-                    }
+                    $destr = $migration->isDestructive();
+                    if ($destr) $destructives[] = $destr;
                 }
             }
         }
@@ -106,7 +121,7 @@
 
     // TOOD cehck admin
     if ($hasConfig && $hasAdmin && $hasMigrated) {
-        echo "Already set up"; // TODO: reditect. // TODO: migrations
+        echo "Already set up"; // TODO: reditect.
         exit;
     }
 
@@ -185,14 +200,14 @@
             }
         } else if ($pdo && !$hasMigrated) {
             // Run migrations
-            foreach ($migrations as $k => $v) {
-                $sql = file_get_contents("migrations/" . $v);
-                $statements = array_filter(array_map('trim', explode(";", $sql)));
-                foreach ($statements as $stmt) {
-                    if (!empty($stmt)) {
-                        $pdo->exec($stmt);
-                    }
+            foreach ($migrations as $migration) {
+                $result = $migration->run($pdo, $current_version);
+                if (!$result['success']) {
+                    $kname = get_class($migration);
+                    $err = $result['message'];
+                    die("Migration $kname failed: $err");
                 }
+                $current_version = $migration->to;
             }
         } else if ($pdo && !$hasAdmin) {
             $registered = MeshLoguser::register($meshlog, $admin_username, $admin_password, 0xFFFF);
@@ -214,6 +229,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Meshlog Setup</title>
     <link rel="stylesheet" href="assets/css/style.css">
+    <style>
+        li {
+            margin-left: 16px;
+        }
+    </style>
 </head>
 <body>
     <div id="login">
@@ -241,7 +261,23 @@
                 </div>
 <?php elseif (!$hasMigrated): ?>
                 Migrations pending:
-                <?php print_r($migrations); ?>
+                <ul>
+                    <?php foreach ($migrations as $m) {
+                        $n = $m->getName();
+                        echo "<li> $n </li>\n";
+                    }
+                    ?>
+                </ul>
+    <?php if ($current_version >= 0 && sizeof($destructives)): ?>
+                <br>
+                <h2 style="color: #F44336">Warning: Here be dragons. Backup your database.</h2>
+                <ul>
+                    <?php foreach ($destructives as $d) {
+                        echo "<li> $d </li>\n";
+                    }
+                    ?>
+                </ul>
+    <?php endif ?>
 <?php elseif (!$hasAdmin): ?>
                 <!-- User -->
                 <h2 class="form-title">Admin user</h2>
@@ -261,7 +297,7 @@
                 <div id="setup-error" class="form-group"></div>
 
                 <div class="form-group right">
-                    <input type="button" value="Setup" onclick="setup()">
+                    <input id="setup-btn" type="button" value="Setup" onclick="setup()">
                 </div>
             </div>
         </section>
@@ -285,6 +321,10 @@
 
         let err = document.getElementById("setup-error");
 
+        let setupBtn = document.getElementById("setup-btn");
+        setupBtn.disabled = true;
+        setupBtn.value = "Running migrations...";
+
             fetch(window.location.href, {
                 method: "POST",
                 headers: {
@@ -295,6 +335,8 @@
             .then(response => response.json()) // convert response to JSON
             .then(result => {
                 err.innerHTML = '';
+                setupBtn.disabled = false;
+                setupBtn.value = "Setup";
                 if (result.status === "OK") {
                     setTimeout(() => {
                         window.location.reload(true);
@@ -322,6 +364,8 @@
             })
             .catch(error => {
                 err.innerText = "Failed to connect.";
+                setupBtn.disabled = false;
+                setupBtn.value = "Setup";
                 console.error(error);
             });
         }
