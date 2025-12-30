@@ -19,7 +19,7 @@ define("DEFAULT_COUNT", 500);
 
 class MeshLog {
     private $error = '';
-    private $version = 4;
+    private $version = 5;
     private $settings = array(
         MeshlogSetting::KEY_DB_VERSION => 0,
         MeshlogSetting::KEY_MAX_CONTACT_AGE => 1814400
@@ -257,7 +257,7 @@ class MeshLog {
             if (!$channel->save($this)) return $this->repError('failed to save channel');
         }
 
-        $advertisement = MeshLogAdvertisement::findBy("name", $name, $this);
+        $advertisement = MeshLogAdvertisement::findBy("name", $name, $this, array(), True);
         $contact = null;
         if ($advertisement) $contact = MeshLogContact::findById($advertisement->contact_ref->getId(), $this);
 
@@ -304,10 +304,20 @@ class MeshLog {
         $tel->reporter_ref = $reporter;
         $tel->contact_ref = $contact;
 
+        $cname = str_replace(
+            " ",
+            "\\ ",
+            $contact->name
+        );
+
+        $cname = str_replace("\"", "", $cname);
+
         $res = $tel->save($this);
         if ($res) {
             $influxHost = "http://influx.99.anrijs.lv:8086";
             $database   = "SandboxZ";
+
+            $errors = "";
 
             $data = json_decode($tel->data, true);
             foreach ($data as $chan) {
@@ -317,7 +327,7 @@ class MeshLog {
                     $na = $chan['name'];
                     $va = $chan['value'];
 
-                    $cdata = "mc_$na,contact=$pubkey,type=$ty,ch=$ch value=$va";
+                    $cdata = "mc_$na,contact=$pubkey,type=$ty,ch=$ch,name=$cname value=$va";
 
                     $url = "$influxHost/write?db=" . urlencode($database);
 
@@ -327,19 +337,22 @@ class MeshLog {
                     curl_setopt($ch, CURLOPT_POSTFIELDS, $cdata);
                     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 
-                    // Optional: add auth if required
-                    // curl_setopt($ch, CURLOPT_USERPWD, "user:password");
-
                     $response = curl_exec($ch);
                     $httpcode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
                     curl_close($ch);
+
+                    if ($httpcode >= 400) {
+                        $errors .= "Error $httpcode: $response for request $cdata\n";
+                    }
                 }
             }
-        }
 
-        /*
-        [{"channel":1,"type":116,"name":"voltage","value":3.73},{"channel":0,"type":0,"name":"digital_in","value":0}]
-        */
+            if (!empty($errors)) {
+                return $this->repError($errors);
+            }
+        } else {
+            return $this->repError('failed to write db');
+        }
 
         return $res;
     }

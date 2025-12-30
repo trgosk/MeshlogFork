@@ -13,13 +13,17 @@ class MeshLogEntity {
         return static::$table;
     }
 
-    public static function findBy($field, $value, $meshlog, $extra=array()) {
+    public static function findBy($field, $value, $meshlog, $extra=array(), $binary=False) {
         if (empty($value) || empty($field) || !$meshlog) return false;
 
         $tableStr = static::$table;
         $type = is_int($value) ? PDO::PARAM_INT : PDO::PARAM_STR;
 
-        $conditions = ["$field = :$field"];
+        if ($type == PDO::PARAM_STR && $binary) {
+            $conditions = ["BINARY $field = :$field"];
+        } else {
+            $conditions = ["$field = :$field"];
+        }
         $params = [":$field" => [$value, $type]];
 
         foreach ($extra as $key => $condition) {

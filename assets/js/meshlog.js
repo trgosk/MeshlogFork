@@ -19,6 +19,8 @@ class Settings {
 }
 
 class MeshLogObject {
+    static idPrefix = "";
+
     constructor(meshlog, data) {
         this._meshlog = meshlog;
         this.data = {}; // db data
@@ -49,6 +51,10 @@ class MeshLogReporter extends MeshLogObject {
         super(meshlog, data);
         this.contact_id = -1;
         this.getContactId();
+    }
+
+    getStyle() {
+        return JSON.parse(this.data.style);
     }
 
     getContactId() {
@@ -295,7 +301,7 @@ class MeshLogContact extends MeshLogObject {
         if (this.isClient()) {
             const rep = this.isReporter();
             if (rep) {
-                receipt = rep.data.color;
+                receipt = rep.getStyle().color;
             } else {
                 iconUrl = 'assets/img/person.svg';
             }
@@ -596,14 +602,19 @@ class MeshLogReport {
 
         divReport.classList.add('log-entry');
         divReport.instance = this;
-        spDate.classList.add(...['sp', 'c']);
+        spDate.classList.add(...['sp', 'cc']);
         spDot.classList.add(...['dot']);
         spPath.classList.add(...['sp']);
         spSnr.classList.add(...['sp']);
 
-        spDot.style.background = reporter.data.color;
+        let textColor = reporter.getStyle().color;
+        let strokeColor = reporter.getStyle().stroke ?? textColor;
+        let strokeWeight = reporter.getStyle().weight ?? '1px';
+        spDot.innerText = reporter.data.name;
+        spDot.style.color = textColor;
+        spDot.style.border = `solid ${strokeWeight} ${strokeColor}`;
 
-        spDate.innerText = this.data['created_at'];
+        spDate.innerText = this.data['created_at'].split(' ').pop();
         spPath.innerText = this.data['path'] || "direct";
         spSnr.innerText = this.data['snr'];
 
@@ -766,6 +777,7 @@ class MeshLogReportedObject extends MeshLogObject {
         spName.classList.add(...['sp', 't']);
         spName.classList.add(...name.classList);
         spName.innerText = name.text;
+        spName.style.background = name.background ?? '';
 
         spText.classList.add(...['sp']);
         spText.classList.add(...text.classList);
@@ -854,6 +866,7 @@ class MeshLogReportedObject extends MeshLogObject {
 }
 
 class MeshLogAdvertisement extends MeshLogReportedObject {
+    static idPrefix = "a";
     getId()   { return `a_${this.data.id}`; }
     getDate() { return {text: this.data.created_at, classList: []}; }
     getTag()  { return {text: "ADVERT", classList: []}; }
@@ -864,6 +877,7 @@ class MeshLogAdvertisement extends MeshLogReportedObject {
 }
 
 class MeshLogChannelMessage extends MeshLogReportedObject {
+    static idPrefix = "c";
     getTag()  {
         let chid = this.data.channel_id;
         let ch = this._meshlog.channels[chid] ?? false;
@@ -873,7 +887,7 @@ class MeshLogChannelMessage extends MeshLogReportedObject {
 
     getId()   { return `c_${this.data.id}`; }
     getDate() { return {text: this.data.created_at, classList: []}; }
-    getName() { return {text: `${this.data.name}`, classList: ['t-bright']}; }
+    getName() { return {text: `${this.data.name}`, classList: ['t-bright'], background: str2color(this.data.name)}; }
     getText() { return {text: this.data.message, classList: ['t-white']}; }
     getPathTag() { return "MSG"; }
     isVisible() {
@@ -885,6 +899,7 @@ class MeshLogChannelMessage extends MeshLogReportedObject {
 }
 
 class MeshLogDirectMessage extends MeshLogReportedObject {
+    static idPrefix = "d";
     getTag()  {
         let text = '→ unknown';
         if (this.reports.length > 0) {
@@ -899,7 +914,7 @@ class MeshLogDirectMessage extends MeshLogReportedObject {
 
     getId()   { return `d_${this.data.id}`; }
     getDate() { return {text: this.data.created_at, classList: []}; }
-    getName() { return {text: `${this.data.name}`, classList: ['t-bright']}; }
+    getName() { return {text: `${this.data.name}`, classList: ['t-bright'], background: str2color(this.data.name) }; }
     getText() { return {text: this.data.message, classList: ['t-white']}; }
     getPathTag() { return "DIR"; }
     isVisible() { return Settings.getBool('messageTypes.direct', false); }
@@ -1369,8 +1384,8 @@ class MeshLog {
 
         for (let i=0;i<data.objects.length;i++) {
             const o = data.objects[i];
-            const id = o.id;
             const obj = new klass(this, o);
+            const id = klass.idPrefix + o.id;
             this.__addObject(dataset, id, obj);
 
             if (o.created_at) {
@@ -1745,6 +1760,8 @@ class MeshLog {
                     const offset = ln_offset * decors[line_uid].length; // TODO - should increase per 
                     decors[line_uid].push(decor_id);
 
+                    const strokeColor = path.reporter.getStyle().stroke ?? linkStrokeColor;
+
                     const decorator1 = L.polylineDecorator(line1, {
                         patterns: [
                         {
@@ -1753,7 +1770,7 @@ class MeshLog {
                             symbol: L.Symbol.arrowHead({
                                 pixelSize: 10,
                                 polygon: false,
-                                pathOptions: { stroke: true, color: linkStrokeColor, weight: ln_decor_outline }
+                                pathOptions: { stroke: true, color: strokeColor, weight: ln_decor_outline }
                             })
                         },
                         {
@@ -1762,7 +1779,7 @@ class MeshLog {
                             symbol: L.Symbol.arrowHead({
                                 pixelSize: 10,
                                 polygon: false,
-                                pathOptions: { stroke: true, color: path.reporter.data.color, weight: ln_decor_weight }
+                                pathOptions: { stroke: true, color: path.reporter.getStyle().color, weight: ln_decor_weight }
                             })
                         }
                     ]
@@ -1912,11 +1929,21 @@ function haversineDistance(lat1, lon1, lat2, lon2) {
     return R * c; // Distance in km
 }
 
-function escapeXml(str) {
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
+    function escapeXml(str) {
+    return str
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&apos;");
+}
+
+function str2color(str, saturation = 65, lightness = 45) {
+    let hash = 0x811c9dc5n;
+    for (let i = 0; i < str.length; i++) {
+        hash = BigInt.asIntN(32, hash ^ BigInt(str.charCodeAt(i)));
+        hash = BigInt.asIntN(32, hash * 0x01000193n);
+    }
+
+    return `hsl(${Number(hash & 0xFFFFFFFFn) % 360}deg, ${saturation}%, ${lightness}%)`;
 }

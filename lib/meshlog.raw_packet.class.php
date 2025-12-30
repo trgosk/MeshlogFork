@@ -24,9 +24,8 @@ class MeshLogRawPacket extends MeshLogEntity {
         $m->path = $data['packet']['path'] ?? '';
         $m->payload = hex2bin($data['packet']['payload'] ?? '');
         $m->snr = $data['packet']['snr'];
-        $m->decoded = $data['packet']['decoded'];
-
-        $m->received_at = Utils::time2str($data['time']['local']) ?? null;
+        $m->decoded = $data['packet']['decoded'] ?? false;
+        $m->received_at = Utils::time2str($data['time']['local']);
 
         return $m;
     }
@@ -54,8 +53,7 @@ class MeshLogRawPacket extends MeshLogEntity {
     function isValid() {
         if ($this->reporter_id == null) return false;
 
-        if ($this->payload == null) { echo 'Missing mepayloadssage'; return false; }
-        if ($this->received_at == null) { echo 'Missing received_at'; return false; }
+        if ($this->payload == null) { echo '[raw] Missing payload'; return false; }
 
         return true;
     }
