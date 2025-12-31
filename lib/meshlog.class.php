@@ -390,6 +390,8 @@ class MeshLog {
             'enabled = 1'
         );
 
+        $params['count'] = 5000;  //FIX
+
         $results = MeshLogContact::getAll($this, $params);
         $out = [];
         $maxage = isset($params['max_age']) ? $params['max_age'] : 0;
