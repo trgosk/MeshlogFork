@@ -13,7 +13,7 @@ class MeshLogEntity {
         return static::$table;
     }
 
-    public static function findBy($field, $value, $meshlog, $extra=array(), $binary=False) {
+    public static function findBy($field, $value, $meshlog, $extra=array(), $binary=False, $forupdate=False) {
         if (empty($value) || empty($field) || !$meshlog) return false;
 
         $tableStr = static::$table;
@@ -46,6 +46,7 @@ class MeshLogEntity {
         }
 
         $sql = "SELECT * FROM $tableStr WHERE " . implode(' AND ', $conditions) . " ORDER BY id DESC";
+        if ($forupdate) $sql .= " FOR UPDATE";
         $query = $meshlog->pdo->prepare($sql);
         foreach ($params as $param => [$val, $ptype]) {
             $query->bindValue($param, $val, $ptype);
@@ -154,7 +155,7 @@ class MeshLogEntity {
         return false;
     }
 
-public static function getAll($meshlog, $params) {
+    public static function getAll($meshlog, $params) {
         $offset = $params['offset'] ?? 0;
         $count = $params['count'] ?? DEFAULT_COUNT;
         $after_ms = $params['after_ms'] ?? 0;
@@ -227,6 +228,10 @@ public static function getAll($meshlog, $params) {
     public function getError() {
         return $this->error;
     }
+
+     public static function getPublicFields($prefix='t') {
+        throw new Exception(static::class . '::getPublicFields not implemented');
+     }
 }
 
 ?>
