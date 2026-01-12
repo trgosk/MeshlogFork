@@ -19,7 +19,7 @@ if ($err) {
 
     $paramsContacts = array(
         'offset' => getParam('offset', 0),
-        'count' => getParam('count', DEFAULT_COUNT),
+        'count' => getParam('count', CONTACTS_COUNT),  //FIX
         'after_ms' => getParam('after_ms', 0),
         'before_ms' => getParam('before_ms', 0),
     );

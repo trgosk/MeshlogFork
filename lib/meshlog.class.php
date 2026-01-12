@@ -16,6 +16,7 @@ require_once 'meshlog.raw_packet.class.php';
 
 define("MAX_COUNT", 2500);
 define("DEFAULT_COUNT", 500);
+define("CONTACTS_COUNT", 5000);  //FIX
 
 class MeshLog {
     private $error = '';
