@@ -941,6 +941,7 @@ class MeshLogReportedObject extends MeshLogObject {
         // Text values
         let spDate = document.createElement("span");
         let spTag = document.createElement("span");
+        let spPrefix = document.createElement("span");
         let spName = document.createElement("span");
         let spText = document.createElement("span");
 
@@ -957,6 +958,15 @@ class MeshLogReportedObject extends MeshLogObject {
         spTag.classList.add(...tag.classList);
         spTag.innerText = tag.text;
 
+        // Check message times
+        let sentAt = new Date(this.data.sent_at).getTime();
+        let createdAt = new Date(this.data.created_at).getTime();
+        if (Math.abs(sentAt - createdAt) > 1000 * 60 * 15) {
+            spPrefix.textContent = "⚠️";
+            spPrefix.classList.add('warn-icon')
+            createTooltip(spPrefix, `Clock out of sync. Sender time: ${this.data.sent_at}`);
+        }
+
         spName.classList.add(...['sp', 't']);
         spName.classList.add(...name.classList);
         spName.innerText = name.text;
@@ -969,12 +979,14 @@ class MeshLogReportedObject extends MeshLogObject {
         if (text.text) {
             // message
             divLine1.append(spDate);
+            divLine1.append(spPrefix);
             divLine1.append(spTag);
             divLine2.append(spName);
             divLine2.append(spText);
         } else {
             // advert
             divLine1.append(spDate);
+            // divLine1.append(spPrefix);
             // divLine1.append(spTag);
             divLine1.append(spName);
         }
@@ -1182,6 +1194,7 @@ class MeshLog {
         this.__init_message_types();
         this.__init_contact_order();
         this.__init_contact_types();
+        this.__init_warnings();
 
         this.link_layers.addTo(this.map);
 
@@ -1493,6 +1506,28 @@ class MeshLog {
         });
     }
 
+    __init_warnings() {
+        this.dom_warning_messages = document.createElement("div");
+        this.dom_warning_messages.classList.add("warnings");
+        this.dom_warning_messages_btn = document.createElement("button");
+        this.dom_warning_messages_btn.innerText = "Show less";
+        this.dom_warning_messages_btn.classList.add("btn");
+        this.dom_warning_messages_btn.onclick = (e) => {
+            let str = "Show more";
+            let com = "1";
+            if (this.dom_warning.dataset.compact === com) {
+                com = "0";
+                str = "Show less";
+            }
+            this.dom_warning.dataset.compact = com;
+            this.dom_warning_messages_btn.innerText = str;
+            this.updatePaths();
+        }
+
+        this.dom_warning.append(this.dom_warning_messages);
+        this.dom_warning.append(this.dom_warning_messages_btn);
+    }
+
     __addObject(dataset, id, obj) {
         if (dataset.hasOwnProperty(id)) {
             dataset[id].merge(obj.data);
@@ -1547,7 +1582,7 @@ class MeshLog {
     }
 
     showWarning(msg) {
-        this.dom_warning.innerText = msg;
+        this.dom_warning_messages.innerText = msg;
         if (msg.length > 0) {
             this.dom_warning.hidden = false;
         } else {
@@ -1989,7 +2024,11 @@ class MeshLog {
             warnings = [...warnings, ...desc.warnings];
         });
         warnings = [...new Set(warnings)];
-        this.showWarning(warnings.join("\n"));
+        let warningsStr = `${warnings.length} Path warnings`;
+        if (this.dom_warning.dataset.compact != "1") {
+            warningsStr = warnings.join("\n");
+        }
+        this.showWarning(warningsStr);
         this.fadeMarkers();
     }
 
@@ -2140,4 +2179,23 @@ function str2color(str, saturation = 65, lightness = 45) {
     }
 
     return `hsl(${Number(hash & 0xFFFFFFFFn) % 360}deg, ${saturation}%, ${lightness}%)`;
+}
+
+function createTooltip(element, contents) {
+    let tooltip = document.createElement("div");
+    tooltip.textContent = contents;
+    tooltip.classList.add('warn-tooltip');
+
+    element.append(tooltip);
+
+    element.addEventListener("mouseenter", (e) => {
+        const rect = element.getBoundingClientRect();
+        tooltip.style.display = "block";
+        tooltip.style.left = (rect.right + window.scrollX + 8) + "px";
+        tooltip.style.top = (rect.top + window.scrollY + (rect.height / 2) - (tooltip.offsetHeight / 2)) + "px";
+    });
+
+    element.addEventListener("mouseleave", () => {
+        tooltip.style.display = "none";
+    });
 }
