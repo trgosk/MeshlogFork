@@ -6,6 +6,7 @@ class MeshLogContact extends MeshLogEntity {
     public $public_key = null;
     public $enabled = null;
     public $name = null;
+    public $hash_size = null;
     public $last_heard_at = null;
     public $created_at = null;
 
@@ -27,6 +28,7 @@ class MeshLogContact extends MeshLogEntity {
         $m->public_key = $data['public_key'];
         $m->name = $data['name'];
         $m->enabled = $data['enabled'];
+        $m->hash_size = $data['hash_size'];
         $m->created_at = $data['created_at'];
         $m->last_heard_at = $data['last_heard_at'];
 
@@ -43,6 +45,7 @@ class MeshLogContact extends MeshLogEntity {
             'id' => $this->getId(),
             'public_key' => $this->public_key,
             'name' => $this->name,
+            'hash_size' => $this->hash_size,
             'created_at' => $this->created_at,
             'last_heard_at' => $this->last_heard_at,
         );
@@ -52,6 +55,7 @@ class MeshLogContact extends MeshLogEntity {
         return array(
             "public_key" => array($this->public_key, PDO::PARAM_STR),
             "name" => array($this->name, PDO::PARAM_STR),
+            "hash_size" => array($this->hash_size, PDO::PARAM_INT),
             "enabled" => array($this->enabled, PDO::PARAM_STR),
         );
     }

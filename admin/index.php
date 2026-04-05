@@ -256,8 +256,6 @@
             let td2 = row.insertCell();
 
             let getReporter = () => { 
-                console.log(pcolor);
-                console.log(pcolor.value);
                 return {
                     id: id,
                     name: name.value,

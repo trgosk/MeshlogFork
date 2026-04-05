@@ -3,6 +3,9 @@
 class MeshLogSetting extends MeshLogEntity {
     const KEY_DB_VERSION = "DB_VERSION";
     const KEY_MAX_CONTACT_AGE = "MAX_CONTACT_AGE";
+    const KEY_MAX_GROUPING_AGE = "MAX_GROUPING_AGE";
+    const KEY_INFLUXDB_URL = "INFLUXDB_URL";
+    const KEY_INFLUXDB_DB = "INFLUXDB_DB";
 
     protected static $table = "settings";
 

@@ -20,10 +20,13 @@ define("CONTACTS_COUNT", 5000);  //FIX
 
 class MeshLog {
     private $error = '';
-    private $version = 6;
+    private $version = 7;
     private $settings = array(
         MeshlogSetting::KEY_DB_VERSION => 0,
-        MeshlogSetting::KEY_MAX_CONTACT_AGE => 1814400
+        MeshlogSetting::KEY_MAX_CONTACT_AGE => 1814400,
+        MeshlogSetting::KEY_MAX_GROUPING_AGE => 21600,
+        MeshlogSetting::KEY_INFLUXDB_URL => "",
+        MeshlogSetting::KEY_INFLUXDB_DB => "Meshlog"
     );
 
     function __construct($config) {
@@ -187,6 +190,9 @@ class MeshLog {
 
         if ($contact) {
             $contact->name = $data['contact']['name'];
+            if (array_key_exists('hash_size', $data)) {
+                $contact->hash_size = $data['hash_size'];
+            }
         } else {
             $contact = MeshLogContact::fromJson($data, $this);
             $contact->name = $data['contact']['name'];
@@ -197,10 +203,10 @@ class MeshLog {
         $adv = MeshLogAdvertisement::fromJson($data, $this);
         $adv->contact_ref = $contact;
 
-        // 2 min grouping
+        // Time grouping
         // Can't use sent_at. Device after reboot might send advert
         // with bad date, making hash duplicate with older messages
-        $minage = date("Y-m-d H:i:s", time() - 120);
+        $minage = date("Y-m-d H:i:s", time() -  $this->getConfig(MeshlogSetting::KEY_MAX_GROUPING_AGE));
         $existing = MeshLogAdvertisement::findBy(
             "hash",
             $adv->hash,
@@ -243,10 +249,10 @@ class MeshLog {
         $dm = MeshLogDirectMessage::fromJson($data, $this);
         $dm->contact_ref = $contact;
 
-        // 2 min grouping
+        // Time grouping
         // Can't use sent_at. Device after reboot might send advert
         // with bad date, making hash duplicate with older messages
-        $minage = date("Y-m-d H:i:s", time() - 120);
+        $minage = date("Y-m-d H:i:s", time() -  $this->getConfig(MeshlogSetting::KEY_MAX_GROUPING_AGE));
         $existing = MeshLogDirectMessage::findBy(
             "hash",
             $dm->hash,
@@ -298,10 +304,10 @@ class MeshLog {
         $grpmsg->contact_ref = $contact;
         $grpmsg->channel_ref = $channel;
 
-        // 2 min grouping
+        // Time grouping
         // Can't use sent_at. Device after reboot might send advert
         // with bad date, making hash duplicate with older messagesq
-        $minage = date("Y-m-d H:i:s", time() - 120);
+        $minage = date("Y-m-d H:i:s", time() -  $this->getConfig(MeshlogSetting::KEY_MAX_GROUPING_AGE));
         $existing = MeshLogChannelMessage::findBy("hash", $grpmsg->hash, $this, array('created_at' => array('operator' => '>', 'value' => $minage)));
 
         if ($existing) {
@@ -320,6 +326,31 @@ class MeshLog {
             return $rep->save($this);
         }
         return $saved;
+    }
+
+    private function writeInfluxDb($line) {
+        $influxHost = $this->getConfig(MeshlogSetting::KEY_INFLUXDB_URL, "");
+        $database   = $this->getConfig(MeshlogSetting::KEY_INFLUXDB_DB, ""); 
+
+        if (empty($influxHost) || empty($database)) return;
+
+        $url = "$influxHost/write?db=" . urlencode($database);
+
+        // Initialize cURL
+        $ch = curl_init($url);
+        curl_setopt($ch, CURLOPT_POST, 1);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $line);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+
+        $response = curl_exec($ch);
+        $httpcode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($httpcode >= 400) {
+            return "Error $httpcode: $response for request $line";
+        }
+
+        return "";
     }
 
     private function insertTelemetry($data, $reporter) {
@@ -348,9 +379,6 @@ class MeshLog {
 
         $res = $tel->save($this);
         if ($res) {
-            $influxHost = "http://influx.99.anrijs.lv:8086";
-            $database   = "SandboxZ";
-
             $errors = "";
 
             $data = json_decode($tel->data, true);
@@ -361,22 +389,10 @@ class MeshLog {
                     $na = $chan['name'];
                     $va = $chan['value'];
 
-                    $cdata = "mc_$na,contact=$pubkey,type=$ty,ch=$ch,name=$cname value=$va";
-
-                    $url = "$influxHost/write?db=" . urlencode($database);
-
-                    // Initialize cURL
-                    $ch = curl_init($url);
-                    curl_setopt($ch, CURLOPT_POST, 1);
-                    curl_setopt($ch, CURLOPT_POSTFIELDS, $cdata);
-                    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-
-                    $response = curl_exec($ch);
-                    $httpcode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-                    curl_close($ch);
-
-                    if ($httpcode >= 400) {
-                        $errors .= "Error $httpcode: $response for request $cdata\n";
+                    $line = "mc_$na,contact=$pubkey,type=$ty,ch=$ch,name=$cname value=$va";
+                    $error = $this->writeInfluxDb($line);
+                    if (!empty($error)) {
+                        $errors .= $error . "\n";
                     }
                 }
             }
@@ -402,9 +418,33 @@ class MeshLog {
     // TODO
     private function insertSelfReport($data, $reporter) {
         if (!$reporter) return;
+        if (!$data['contact'] || !$data['sys']) return;
+
         $lat = $data['contact']['lat'] ?? null;
         $lon = $data['contact']['lon'] ?? null;
-        $reporter->updateLocation($this, $lat, $lon);
+
+        $vdata = array(
+            "version" => $data['sys']['version'] ?? null
+        );
+
+        $reporter->updateLocation($this, $lat, $lon, $vdata);
+
+        $pubkey = $data['contact']['pubkey'];
+        $heap_total = $data['sys']['heap_total'];
+        $heap_free = $data['sys']['heap_free'];
+        $rssi = $data['sys']['rssi'];
+        $uptime = $data['sys']['uptime'];
+
+        $cname = str_replace(
+            " ",
+            "\\ ",
+            $data['contact']['name']
+        );
+
+        $cname = str_replace("\"", "", $cname);
+
+        $line = "mc_reporter,contact=$pubkey,name=$cname heap_total=$heap_total,heap_free=$heap_free,rssi=$rssi,uptime=$uptime";
+        $error = $this->writeInfluxDb($line);
     }
 
     private function repError($msg) {
@@ -416,7 +456,21 @@ class MeshLog {
         $params['where'] = array(
             'authorized = 1'
         );
-        return MeshLogReporter::getAll($this, $params);
+        $results = MeshLogReporter::getAll($this, $params);
+
+        // find contact
+        $out = [];
+        foreach ($results['objects'] as $k => $r) {
+            $pk = $r["public_key"];
+            $c = MeshLogContact::findBy("public_key", $pk, $this, array());
+            if ($c) {
+                $r['contact_id'] = $c->getId();
+                $r['contact'] = $c->asArray();
+            }
+            $out[] = $r;
+        }
+
+        return array("objects" => $out);
     }
 
     public function getContacts($params, $adv=FALSE) {
@@ -635,6 +689,7 @@ class MeshLog {
                 t.id,
                 t.public_key,
                 t.name,
+                t.hash_size,
                 t.last_heard_at,
                 t.created_at,
 

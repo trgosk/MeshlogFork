@@ -9,6 +9,7 @@ class MeshLogChannelMessage extends MeshLogEntity {
     public $hash = null;
     public $name = null;
     public $message = null;
+    public $hash_size = null;
 
     public $sent_at = null;
     public $created_at = null;
@@ -25,6 +26,7 @@ class MeshLogChannelMessage extends MeshLogEntity {
         $msg  = $parts[1] ? substr($parts[1], 1) : ''; 
 
         $m->hash = $data['hash'] ?? null;
+        $m->hash_size = $data['hash_size'] ?? 1;
         $m->name = $name;
         $m->message = $msg;
 
@@ -42,7 +44,8 @@ class MeshLogChannelMessage extends MeshLogEntity {
         $m->hash = $data['hash'];
         $m->name = $data['name'];
         $m->message = $data['message'];
-    
+        $m->hash_size = $data['hash_size'];
+
         $m->sent_at = $data['sent_at'];
         $m->created_at = $data['created_at'];
 
@@ -75,6 +78,7 @@ class MeshLogChannelMessage extends MeshLogEntity {
             'hash' => $this->hash,
             'name' => $this->name,
             'message' => $this->message,
+            "hash_size" => $this->hash_size,
             'sent_at' => $this->sent_at,
             'created_at' => $this->created_at
         );
@@ -91,6 +95,7 @@ class MeshLogChannelMessage extends MeshLogEntity {
             "hash" => array($this->hash, PDO::PARAM_STR),
             "name" => array($this->name, PDO::PARAM_STR),
             "message" => array($this->message, PDO::PARAM_STR),
+            "hash_size" => array($this->hash_size, PDO::PARAM_INT),
             "sent_at" => array($this->sent_at, PDO::PARAM_STR),
         );
     }
@@ -102,6 +107,7 @@ class MeshLogChannelMessage extends MeshLogEntity {
                 $prefix.hash,
                 $prefix.name,
                 $prefix.message,
+                $prefix.hash_size,
                 $prefix.sent_at,
                 $prefix.created_at";
     }

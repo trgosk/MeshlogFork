@@ -18,6 +18,7 @@
         $reporter->auth = $_POST['auth'] ?? $errors[] = 'Missing ayth key';
         $reporter->authorized = $_POST['authorized'] ?? true;
         $reporter->style = $_POST['style'] ?? $errors[] = 'Missing style';
+        $reporter->data = '{}';
 
         if (!sizeof($errors)) {
             // save

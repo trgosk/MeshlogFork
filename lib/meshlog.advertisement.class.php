@@ -11,6 +11,7 @@ class MeshLogAdvertisement extends MeshLogEntity {
     public $lon = null;
     public $type = null;
     public $flags = null;
+    public $hash_size = null;
 
     public $sent_at = null;
     public $created_at = null;
@@ -22,6 +23,7 @@ class MeshLogAdvertisement extends MeshLogEntity {
         if (!isset($data['time'])) return $m;
 
         $m->hash = $data['hash'] ?? null;
+        $m->hash_size = $data['hash_size'] ?? 1;
         $m->name = $data['contact']['name'] ?? null;
         $m->lat = floatval($data['contact']['lat']) ?? 0.0;
         $m->lon = floatval($data['contact']['lon']) ?? 0.0;
@@ -52,6 +54,7 @@ class MeshLogAdvertisement extends MeshLogEntity {
         $m->lon = $data['lon'];
         $m->type = $data['type'];
         $m->flags = $data['flags'];
+        $m->hash_size = $data['hash_size'];
     
         $m->sent_at = $data['sent_at'];
         $m->created_at = $data['created_at'];
@@ -97,6 +100,7 @@ class MeshLogAdvertisement extends MeshLogEntity {
             "lon" => floatval($this->lon),
             "type" => $this->type,
             "flags" => $this->flags,
+            "hash_size" => $this->hash_size,
             "sent_at" => $this->sent_at,
             "created_at" => $this->created_at
         );
@@ -115,6 +119,7 @@ class MeshLogAdvertisement extends MeshLogEntity {
             "lon" => array($this->lon, PDO::PARAM_STR),
             "type" => array($this->type, PDO::PARAM_INT),
             "flags" => array($this->flags, PDO::PARAM_INT),
+            "hash_size" => array($this->hash_size, PDO::PARAM_INT),
             "sent_at" => array($this->sent_at, PDO::PARAM_STR),
         );
     }
@@ -128,6 +133,7 @@ class MeshLogAdvertisement extends MeshLogEntity {
                 $prefix.lon,
                 $prefix.type,
                 $prefix.flags,
+                $prefix.hash_size,
                 $prefix.sent_at,
                 $prefix.created_at";
     }

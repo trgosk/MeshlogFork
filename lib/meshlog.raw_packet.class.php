@@ -10,6 +10,7 @@ class MeshLogRawPacket extends MeshLogEntity {
     public $payload = null;
     public $snr = null;
     public $decded = null;
+    public $hash_size = null;
 
     public $received_at = null;
     public $created_at = null;
@@ -20,6 +21,7 @@ class MeshLogRawPacket extends MeshLogEntity {
         if (!isset($data['time'])) return $m;
         if (!isset($data['packet'])) return $m;
 
+        $m->hash_size = $data['packet']['hash_size'] ?? 1;
         $m->header = $data['packet']['header'] ?? 0;
         $m->path = $data['packet']['path'] ?? '';
         $m->payload = hex2bin($data['packet']['payload'] ?? '');
@@ -41,7 +43,8 @@ class MeshLogRawPacket extends MeshLogEntity {
         $m->payload = $data['payload'];
         $m->snr = $data['snr'];
         $m->decoded = $data['decoded'];
-    
+        $m->hash_size = $data['hash_size'];
+
         $m->received_at = $data['received_at'];
         $m->created_at = $data['created_at'];
 
@@ -67,6 +70,7 @@ class MeshLogRawPacket extends MeshLogEntity {
             'payload' => bin2hex($this->payload),
             'snr' => $this->snr,
             'decoded' => $this->decoded,
+            "hash_size" => $this->hash_size,
             'received_at' => $this->received_at,
             'created_at' => $this->created_at
         );
@@ -81,6 +85,7 @@ class MeshLogRawPacket extends MeshLogEntity {
             "path" => array($this->path, PDO::PARAM_STR),
             "snr" => array($this->snr, PDO::PARAM_INT),
             "decoded" => array($this->decoded, PDO::PARAM_INT),
+            "hash_size" => array($this->hash_size, PDO::PARAM_INT),
             "received_at" => array($this->received_at, PDO::PARAM_STR),
             "created_at" => array($this->created_at, PDO::PARAM_STR)
         );

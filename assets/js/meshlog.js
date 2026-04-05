@@ -117,7 +117,7 @@ class MeshLogContact extends MeshLogObject {
         this.marker = null;
 
         this.flags.dupe = false;
-        this.hash = data.public_key.substr(0, 2).toLowerCase();
+        this.hash = data.public_key.substr(0, 2 * data.hash_size).toLowerCase();
         this.neighbors_visible = false;
 
         if (data.advertisement) {
@@ -572,7 +572,7 @@ class MeshLogContact extends MeshLogObject {
         if (!this.dom) return;
         if (!this.adv) return;
 
-        let hashstr = this.data.public_key.substr(0,2);
+        let hashstr = this.hash;
 
         this.dom.container.dataset.type = this.adv.data.type;
         this.dom.container.dataset.time = this.last.time;
@@ -1716,7 +1716,7 @@ class MeshLog {
         let repHashes = {};
         Object.entries(this.contacts).forEach(([id,contact]) => {
             if (contact.isRepeater()) {
-                let hashstr = contact.data.public_key.substr(0,2);
+                let hashstr = contact.hash;
                 if (!repHashes.hasOwnProperty(hashstr)) {
                     repHashes[hashstr] = 1;
                 } else {
@@ -1731,7 +1731,7 @@ class MeshLog {
 
             // Mark dupes
             if (contact.isRepeater()) {
-                let hashstr = contact.data.public_key.substr(0,2);
+                let hashstr = contact.hash;
                 let count = repHashes[hashstr];
                 contact.flags.dupe = count > 1;
             }
@@ -1962,6 +1962,38 @@ class MeshLog {
                     line1.addTo(this.link_layers);
                     line2.addTo(this.link_layers);
                 }
+
+                let dist = haversineDistance(path.to.lat, path.to.lon, path.from.lat, path.from.lon);
+                if (dist < 1) {
+                    dist = `${Math.round(dist*1000)} m`;
+                } else {
+                    dist = `${Math.round(dist * 100) / 100} km`;
+                }
+
+                line1.bindTooltip(dist, {
+                    sticky: true,     // follows mouse
+                    direction: 'top'  // optional, tooltip position
+                });
+
+                line2.bindTooltip(dist, {
+                    sticky: true,     // follows mouse
+                    direction: 'top'  // optional, tooltip position
+                });
+
+                const mouseover = function(e) {
+                    line1.setStyle({ color: 'yellow' });
+                    this.openTooltip(); // show tooltip manually
+                }
+
+                const mouseout = function(e) {
+                    line1.setStyle({ color: linkStrokeColor });
+                    this.closeTooltip();
+                }
+
+                line1.on('mouseover', mouseover.bind(line1));
+                line1.on('mouseout', mouseout.bind(line1));
+                line2.on('mouseover', mouseover.bind(line2));
+                line2.on('mouseout', mouseout.bind(line2));
 
                 // Circle
                 if (path.circle && !circles.includes(circle_id)) {

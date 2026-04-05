@@ -165,7 +165,8 @@ h2 {
     width: 14px;
 }
 
-.log-entry:hover {
+.log-entry:hover,
+.log-entry.hover {
     background:rgb(52, 53, 54);
     cursor: pointer;
 }
@@ -322,7 +323,7 @@ h2 {
 
 .warnings {
     color: #ff0;
-    font-size: 1.0em;
+    font-size: 0.8em;
     margin: 2px;
 }
 
