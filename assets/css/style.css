@@ -8,6 +8,13 @@
 
 html {
     background: #262626;
+    height: 100%;
+}
+
+body {
+    min-height: 100%;
+    background: #262626;
+    overflow: hidden;
 }
 
 h1 {
@@ -241,10 +248,22 @@ h2 {
 #container {
     display: flex;
     flex-direction: row;
+    width: 100vw;
+    height: 100vh;
+    height: 100svh;
+    overflow: hidden;
+    --mobile-map-height: 320px;
+    --mobile-drag-height: 8px;
 }
 
 #logs, #contacts {
     padding: 8px;
+    min-height: 0;
+}
+
+#mobile-tabs,
+#mobile-vdrag {
+    display: none;
 }
 
 .filter-warning {
@@ -274,13 +293,18 @@ h2 {
 #leftbar, #rightbar {
     background: #262626;
     height: 100vh;
+    height: 100svh;
     overflow-y: auto;
+    min-width: 0;
 }
 
 #midbar {
     display: flex;
     flex-direction: row;
     height: 100vh;
+    height: 100svh;
+    min-width: 0;
+    min-height: 0;
 }
 
 .resize-bar {
@@ -303,6 +327,22 @@ h2 {
     width: 2px;
     height: 15px;
     border-inline: 1px solid #fff;
+}
+
+.resize-bar-horizontal {
+    width: 100%;
+    height: var(--mobile-drag-height);
+    cursor: row-resize;
+    background: transparent;
+}
+
+.resize-bar-horizontal::before {
+    width: 28px;
+    height: 2px;
+    border-inline: none;
+    border-top: 1px solid #fff;
+    border-bottom: none;
+    opacity: 0.9;
 }
 
 .btn {
@@ -456,20 +496,84 @@ h2 {
 
 @media only screen and (max-width: 900px) {
     #container {
-        display: flex;
-        flex-direction: column;
-        justify-content: space-between;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: minmax(180px, var(--mobile-map-height)) var(--mobile-drag-height) auto minmax(0, 1fr);
+        grid-template-areas:
+            "map"
+            "split"
+            "tabs"
+            "sidebar";
     }
 
     #leftbar {
-        flex: auto;
-        background: #262626;
-        height: 50vh;
+        grid-area: sidebar;
+        height: auto;
+        border-top: none;
     }
 
     #midbar {
-        flex: auto;
-        height: 50vh;
+        grid-area: map;
+        height: auto;
+    }
+
+    #rightbar {
+        grid-area: sidebar;
+        height: auto;
+        border-top: none;
+    }
+
+    #leftbar,
+    #rightbar {
+        min-height: 0;
+    }
+
+    #midbar,
+    #leftbar,
+    #rightbar {
+        width: 100% !important;
+    }
+
+    .resize-bar:not(.resize-bar-horizontal) {
+        display: none;
+    }
+
+    #mobile-vdrag {
+        display: block;
+        grid-area: split;
+        height: var(--mobile-drag-height);
+        touch-action: none;
+    }
+
+    #mobile-tabs {
+        grid-area: tabs;
+        display: flex;
+        gap: 8px;
+        padding: 8px;
+        border-top: solid 1px #343536;
+        border-bottom: solid 1px #343536;
+        background: #202020;
+    }
+
+    .mobile-tab-btn {
+        flex: 1;
+        border: solid 1px #444857;
+        background: #262626;
+        color: #aaa;
+        padding: 8px 10px;
+        border-radius: 6px;
+        cursor: pointer;
+    }
+
+    .mobile-tab-btn.active {
+        background: #2a536d;
+        border-color: #2a536d;
+        color: #fff;
+    }
+
+    #logs,
+    #contacts {
+        padding: 6px;
     }
 }
 

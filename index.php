@@ -45,6 +45,11 @@
     </div>
     <div class="resize-bar" id="rightdrag"></div>
 </div>
+<div class="resize-bar resize-bar-horizontal" id="mobile-vdrag"></div>
+<div id="mobile-tabs" role="tablist" aria-label="Mobile sidebar tabs">
+    <button type="button" class="mobile-tab-btn active" data-mobile-tab-target="logs" role="tab" aria-selected="true">Messages</button>
+    <button type="button" class="mobile-tab-btn" data-mobile-tab-target="contacts" role="tab" aria-selected="false">Contacts</button>
+</div>
 <div id="rightbar">
     <div class="settings" id="settings-contacts">
     </div>
@@ -96,7 +101,7 @@ class Drags {
         this.pairs = [];
         this.container = document.getElementById(id);
 
-        self = this;
+        const self = this;
 
         this.container.addEventListener("mousemove", function (e) {
             e.preventDefault();
@@ -116,15 +121,14 @@ class Drags {
             if (split < 0.05) split = 0.05;
 
             let ppLeft = pair.sum * split; // % left
-            let ppRight = pair.sum - ppLeft;
 
             pair.left.setWidth(ppLeft);
-            pair.right.setWidth(ppRight);
+            pair.right.setWidth(pair.sum - ppLeft);
             
             map.invalidateSize();
         });
 
-        this.container.addEventListener("mouseup", function (e) {
+        this.container.addEventListener("mouseup", function () {
             self.cancelDrag();
         });
     }
@@ -140,12 +144,6 @@ class Drags {
         }
     }
 
-    isDraging() {
-        for (var i=0;i<this.pairs.length;i++) {
-            if (this.pairs[i].drag) return true;
-        }
-        return false;
-    }
 }
 
 class DragPair {
@@ -158,7 +156,7 @@ class DragPair {
 
         const self = this;
 
-        this.bar.addEventListener("mousedown", function (e) {
+        this.bar.addEventListener("mousedown", function () {
             if (self.drags) self.drags.cancelDrag();
             self.calc();
             self.drag = true;
@@ -182,40 +180,147 @@ class DragPair {
     }
 }
 
+const MOBILE_BREAKPOINT = 900;
+const MOBILE_DEFAULT_MAP_HEIGHT = 320;
+const MOBILE_MIN_MAP_HEIGHT = 180;
+const MOBILE_MIN_PANEL_HEIGHT = 60;
+const MOBILE_DRAG_HIT_HEIGHT = 28;
+
 const leftBar = new Bar("leftbar", 33);
 const middleBar = new Bar("midbar", 47);
 const rightBar = new Bar("rightbar", 20);
+const container = document.getElementById("container");
+const leftBarDom = document.getElementById("leftbar");
+const rightBarDom = document.getElementById("rightbar");
+const mobileVDrag = document.getElementById("mobile-vdrag");
+const mobileTabButtons = Array.from(document.querySelectorAll("[data-mobile-tab-target]"));
+
+let mobileDrag = false;
+let mobileMapHeight = Number(Settings.get("mobile.mapHeight", MOBILE_DEFAULT_MAP_HEIGHT)) || MOBILE_DEFAULT_MAP_HEIGHT;
+let mobileActiveTab = Settings.get("mobile.activeTab", "logs") || "logs";
 
 const dragLeft = new DragPair("leftdrag", leftBar, middleBar);
 const dragRight = new DragPair("rightdrag", middleBar, rightBar);
 
+function getViewportHeight() {
+    const heights = [
+        window.innerHeight,
+        document.documentElement?.clientHeight,
+        window.visualViewport?.height
+    ]
+        .map(value => Number(value) || 0)
+        .filter(value => value > 0);
+
+    return heights.length ? Math.max(...heights) : MOBILE_DEFAULT_MAP_HEIGHT;
+}
+
+function clampMobileMapHeight(height) {
+    const viewportHeight = getViewportHeight();
+    const maxHeight = Math.max(MOBILE_MIN_MAP_HEIGHT, viewportHeight - MOBILE_MIN_PANEL_HEIGHT);
+    return Math.max(MOBILE_MIN_MAP_HEIGHT, Math.min(height, maxHeight));
+}
+
+function setMobileMapHeight(height, persist=true) {
+    mobileMapHeight = clampMobileMapHeight(height);
+    container.style.setProperty("--mobile-map-height", `${mobileMapHeight}px`);
+    if (persist) {
+        Settings.set("mobile.mapHeight", mobileMapHeight);
+    }
+}
+
+function setMobileTab(tab, persist=true) {
+    mobileActiveTab = tab === "contacts" ? "contacts" : "logs";
+    const isMobile = window.innerWidth <= MOBILE_BREAKPOINT;
+
+    leftBarDom.hidden = isMobile && mobileActiveTab !== "logs";
+    rightBarDom.hidden = isMobile && mobileActiveTab !== "contacts";
+
+    mobileTabButtons.forEach(button => {
+        const active = button.dataset.mobileTabTarget === mobileActiveTab;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-selected", active ? "true" : "false");
+    });
+
+    if (persist) {
+        Settings.set("mobile.activeTab", mobileActiveTab);
+    }
+}
+
+function isNearMobileDragHandle(target, clientY) {
+    if (window.innerWidth > MOBILE_BREAKPOINT) return false;
+    if (target?.closest?.("#mobile-tabs")) return false;
+
+    const rect = mobileVDrag.getBoundingClientRect();
+    if (!rect.height) return false;
+
+    const centerY = rect.top + (rect.height / 2);
+    const halfHit = MOBILE_DRAG_HIT_HEIGHT / 2;
+
+    return clientY >= centerY - halfHit && clientY <= centerY + halfHit;
+}
 function resize() {
-    if (window.innerWidth <= 900) {
+    if (window.innerWidth <= MOBILE_BREAKPOINT) {
         leftBar.setTmpWidth(100);
         middleBar.setTmpWidth(100);
         rightBar.setTmpWidth(100);
+        setMobileTab(mobileActiveTab, false);
+        mobileVDrag.hidden = false;
     } else {
         leftBar.resetWidth();
         middleBar.resetWidth();
         rightBar.resetWidth();
+        mobileVDrag.hidden = true;
+        leftBarDom.hidden = false;
+        rightBarDom.hidden = false;
+        container.style.removeProperty("--mobile-map-height");
+    }
+
+    if (typeof map !== "undefined") {
+        requestAnimationFrame(() => map.invalidateSize());
     }
 }
-
-window.addEventListener("resize", function() {
-    resize();
-});
 
 const drags = new Drags("container");
 drags.add(dragLeft);
 drags.add(dragRight);
 
-resize();
+mobileTabButtons.forEach(button => {
+    button.addEventListener("click", function() {
+        setMobileTab(button.dataset.mobileTabTarget);
+    });
+});
 
-const formatedTimestamp = (d=new Date())=> {
-  const date = d.toISOString().split('T')[0];
-  const time = d.toTimeString().split(' ')[0];
-  return `${date} ${time}`
-}
+window.addEventListener("pointerdown", function(e) {
+    if (!isNearMobileDragHandle(e.target, e.clientY)) return;
+
+    mobileDrag = true;
+    mobileVDrag.setPointerCapture?.(e.pointerId);
+    e.preventDefault();
+});
+
+window.addEventListener("pointermove", function(e) {
+    if (!mobileDrag) return;
+
+    const top = container.getBoundingClientRect().top;
+    setMobileMapHeight(e.clientY - top, false);
+
+    if (typeof map !== "undefined") {
+        map.invalidateSize();
+    }
+});
+
+window.addEventListener("pointerup", function() {
+    if (!mobileDrag) return;
+
+    mobileDrag = false;
+    setMobileMapHeight(mobileMapHeight);
+
+    if (typeof map !== "undefined") {
+        map.invalidateSize();
+    }
+});
+
+resize();
 
 var map = L.map('map').setView([56.96894, 24.14520], 10);
 let layerOsm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -243,7 +348,7 @@ let layerOsmD = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     className: 'dark-tiles'
 });
 
-var layerControl = L.control.layers({
+L.control.layers({
     "OpenStreetMap": layerOsm,
     "OpenStreetMap (CSS-Filter Dark)": layerOsmD,
     "OpenStreetMap (carto Light)": layerOsmLight,
