@@ -1654,6 +1654,10 @@ class MeshLog {
     }
 
     getVisibleContactIdsByReporter() {
+        if (!this.hasActiveReporterFilter()) {
+            return new Set(Object.values(this.contacts).map(contact => String(contact.data.id)));
+        }
+
         const visible = new Set();
 
         for (const reporter of Object.values(this.reporters)) {
