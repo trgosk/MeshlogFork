@@ -1427,6 +1427,7 @@ class MeshLog {
 
         this.__init_message_types();
         this.__init_reporter_filter();
+        this.__init_filter_warnings();
         this.__init_contact_order();
         this.__init_contact_types();
         this.__init_warnings();
@@ -1478,6 +1479,7 @@ class MeshLog {
         let ico = document.createElement("img");
 
         cb.type = "checkbox";
+        cb.dataset.settingKey = key;
         cb.checked = Settings.getBool(key, def);
         console.log('create cb: ', key, cb.checked);
         cb.onchange = (e) => {
@@ -1507,6 +1509,7 @@ class MeshLog {
         let inp = document.createElement("input");
 
         inp.type = "text";
+        inp.dataset.settingKey = key;
         inp.value = localStorage[key] ?? def;
         inp.oninput = (e) => {
             localStorage[key] = e.target.value;
@@ -1518,6 +1521,31 @@ class MeshLog {
         div.appendChild(inp);
 
         return div;
+    }
+
+    __init_filter_warnings() {
+        const buildWarning = (container, onclick) => {
+            if (!container) return null;
+
+            let text = document.createElement("span");
+            let button = document.createElement("button");
+
+            text.classList.add("filter-warning-text");
+            button.classList.add("btn", "filter-warning-btn");
+            button.type = "button";
+            button.innerText = "Clear Filters";
+            button.onclick = onclick;
+
+            container.append(text);
+            container.append(button);
+
+            return { container, text, button };
+        };
+
+        this.filter_warnings = {
+            logs: buildWarning(this.dom_logs_filter_warning, () => this.clearFilterWarnings()),
+            contacts: buildWarning(this.dom_contacts_filter_warning, () => this.clearFilterWarnings()),
+        };
     }
 
     __init_reporter_filter() {
@@ -1580,6 +1608,49 @@ class MeshLog {
             reporter.updateSettingsDom();
             this.dom_reporter_filter.panel.append(dom.container);
         }
+    }
+
+    clearReporterFiltersState() {
+        for (const reporter of Object.values(this.reporters)) {
+            Settings.set(reporter.getSettingsKey(), true);
+        }
+    }
+
+    clearContactListFiltersState() {
+        const keys = [
+            'contactTypes.clients',
+            'contactTypes.repeaters',
+            'contactTypes.rooms',
+            'contactTypes.sensors',
+        ];
+
+        for (const key of keys) {
+            Settings.set(key, true);
+        }
+        Settings.set('contactFilter.value', '');
+    }
+
+    syncContactFilterControls() {
+        const nodes = this.dom_settings_contacts.querySelectorAll('[data-setting-key]');
+
+        for (const node of nodes) {
+            const key = node.dataset.settingKey;
+            if (!key) continue;
+
+            if (node.type === "checkbox") {
+                node.checked = Settings.getBool(key, true);
+            } else if (node.type === "text") {
+                node.value = Settings.get(key, '');
+            }
+        }
+    }
+
+    clearFilterWarnings() {
+        this.clearReporterFiltersState();
+        this.clearContactListFiltersState();
+        this.syncContactFilterControls();
+        this.updateReporterFilterDom();
+        this.onReporterFilterChanged();
     }
 
     getVisibleContactIdsByReporter() {
@@ -1689,19 +1760,19 @@ class MeshLog {
     }
 
     updateContactsFilterWarning() {
-        if (!this.dom_contacts_filter_warning) return;
+        if (!this.filter_warnings?.contacts) return;
 
         const active = this.hasActiveContactFilter();
-        this.dom_contacts_filter_warning.hidden = !active;
-        this.dom_contacts_filter_warning.innerText = active ? "Filters active: some contacts are hidden." : "";
+        this.filter_warnings.contacts.container.hidden = !active;
+        this.filter_warnings.contacts.text.innerText = active ? "Filters active: some contacts are hidden." : "";
     }
 
     updateMessagesFilterWarning() {
-        if (!this.dom_logs_filter_warning) return;
+        if (!this.filter_warnings?.logs) return;
 
         const active = this.hasActiveMessageFilter();
-        this.dom_logs_filter_warning.hidden = !active;
-        this.dom_logs_filter_warning.innerText = active ? "Filters active: some messages are hidden." : "";
+        this.filter_warnings.logs.container.hidden = !active;
+        this.filter_warnings.logs.text.innerText = active ? "Filters active: some messages are hidden." : "";
     }
 
     isContactVisible(contactId, senderName = "") {

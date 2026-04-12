@@ -254,6 +254,21 @@ h2 {
     border-radius: 4px;
     background: rgba(171, 192, 35, 0.1);
     color: #e2d27a;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.filter-warning[hidden] {
+    display: none;
+}
+
+.filter-warning-text {
+    flex: 1;
+}
+
+.filter-warning-btn {
+    padding: 2px 6px;
 }
 
 #leftbar, #rightbar {
