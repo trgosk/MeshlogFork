@@ -101,6 +101,7 @@ function limitGetAllReports(&$results, $maxReports) {
 
 $meshlog = new MeshLog($config['db']);
 $err = $meshlog->getError();
+$reportLimit = getReportLimitParam(1);
 
 if ($err) {
     $results = array('error' => $err);
@@ -135,6 +136,10 @@ if ($err) {
         'channel_messages' => $channel_messages
     );
 
+    limitContactAdvertisementReportsPerReporter($results['contacts']['objects'], $reportLimit);
+    limitObjectReportsPerReporter($results['advertisements']['objects'], $reportLimit);
+    limitObjectReportsPerReporter($results['direct_messages']['objects'], $reportLimit);
+    limitObjectReportsPerReporter($results['channel_messages']['objects'], $reportLimit);
     limitGetAllReports($results, MAX_GETALL_REPORTS_COUNT);
 }
 

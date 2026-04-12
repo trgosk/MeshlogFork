@@ -1523,6 +1523,23 @@ class MeshLog {
         return div;
     }
 
+    getReportLimitSettingKey() {
+        return 'reporters.reportLimit';
+    }
+
+    getReportLimitSetting() {
+        const raw = Settings.get(this.getReportLimitSettingKey(), 1);
+        const parsed = parseInt(raw, 10);
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+    }
+
+    setReportLimitSetting(value) {
+        const parsed = parseInt(String(value ?? '').trim(), 10);
+        const normalized = Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+        Settings.set(this.getReportLimitSettingKey(), normalized);
+        return normalized;
+    }
+
     __init_filter_warnings() {
         const buildWarning = (container, onclick) => {
             if (!container) return null;
@@ -1602,6 +1619,40 @@ class MeshLog {
         while (this.dom_reporter_filter.panel.firstChild) {
             this.dom_reporter_filter.panel.removeChild(this.dom_reporter_filter.panel.firstChild);
         }
+
+        let limitContainer = document.createElement("div");
+        let limitLabel = document.createElement("span");
+        let limitInput = document.createElement("input");
+        const currentLimit = this.getReportLimitSetting();
+
+        limitContainer.classList.add("reporter-filter-limit");
+        limitLabel.classList.add("reporter-filter-limit-label");
+        limitLabel.innerText = "Max reports per object per reporter";
+        limitInput.type = "text";
+        limitInput.inputMode = "numeric";
+        limitInput.value = currentLimit;
+        limitInput.placeholder = "1";
+
+        limitInput.onchange = () => {
+            const previousLimit = this.getReportLimitSetting();
+            const nextLimit = this.setReportLimitSetting(limitInput.value);
+            limitInput.value = nextLimit;
+
+            if (nextLimit !== previousLimit) {
+                this.reloadAllData();
+            }
+        };
+
+        limitInput.onkeydown = (e) => {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                limitInput.blur();
+            }
+        };
+
+        limitContainer.append(limitLabel);
+        limitContainer.append(limitInput);
+        this.dom_reporter_filter.panel.append(limitContainer);
 
         for (const reporter of reporters) {
             const dom = reporter.createSettingsDom(false);
@@ -2085,6 +2136,8 @@ class MeshLog {
             query.reporters = params['reporters'];
         }
 
+        query.report_limit = this.getReportLimitSetting();
+
         return query;
     }
 
@@ -2155,6 +2208,45 @@ class MeshLog {
         }
 
         return data.objects;
+    }
+
+    resetData() {
+        Object.values(this.contacts).forEach(contact => {
+            if (contact.marker) {
+                this.map.removeLayer(contact.marker);
+            }
+        });
+
+        this.link_layers.eachLayer(layer => {
+            this.link_layers.removeLayer(layer);
+        });
+
+        this.reporters = {};
+        this.contacts = {};
+        this.channels = {};
+        this.messages = {};
+        this.layer_descs = {};
+        this.visible_markers.clear();
+        this.visible_contacts = {};
+        this.links = {};
+        this.latest = 0;
+
+        this.dom_logs.replaceChildren();
+        this.dom_contacts.replaceChildren();
+        this.dom_settings_reporters.replaceChildren();
+
+        this.showWarning('');
+        this.clearNotifications();
+        this.new_messages = {};
+        this.updateReporterFilterDom();
+    }
+
+    reloadAllData() {
+        const interval = this.interval ?? 0;
+        this.setAutorefresh(0);
+        this.resetData();
+        this.loadAll();
+        this.setAutorefresh(interval);
     }
 
     loadNew(onload=null) {
