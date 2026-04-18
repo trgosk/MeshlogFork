@@ -184,6 +184,11 @@ class MeshLogContact extends MeshLogObject {
         this.last = null;
         this.telemetry = null;
         this.marker = null;
+        this.marker_icon_mode = null;
+        this.marker_displayed = true;
+        this.marker_opacity = 1;
+        this.marker_zindex = 2;
+        this.marker_tooltip = null;
 
         this.flags.dupe = false;
         this.hash = data.public_key.substr(0, 2 * data.hash_size).toLowerCase();
@@ -655,8 +660,16 @@ class MeshLogContact extends MeshLogObject {
             return
         }
 
+        this.marker = this.createMarkerLayer();
+        this.applyMarkerState();
+    }
+
+    getMarkerZoomMode() {
+        return this.map && this.map.getZoom() < 11 ? 'point' : 'full';
+    }
+
+    getMarkerAppearance() {
         let iconUrl = 'assets/img/tower.svg';
-        let kl = 'marker-pin';
         let receipt = false;
 
         if (this.isClient()) {
@@ -680,67 +693,192 @@ class MeshLogContact extends MeshLogObject {
             const emojiRegex = /\p{Extended_Pictographic}/u;
             const match = str.match(emojiRegex);
             return match ? match[0] : '';
-        }
+        };
 
-        let innerIcon;
-        let emoji = extractEmoji(this.adv.data.name);
-        if (emoji) {
-            innerIcon = document.createElement('span');
-            innerIcon.innerText = emoji;
-        } else if (receipt) {
-            const hw = '20px';
-            innerIcon = document.createElement('span');
-            innerIcon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" height="${hw}" viewBox="0 -960 960 960" width="${hw}" fill="${receipt}"><path d="M240-80q-50 0-85-35t-35-85v-120h120v-560l60 60 60-60 60 60 60-60 60 60 60-60 60 60 60-60 60 60 60-60v680q0 50-35 85t-85 35H240Zm480-80q17 0 28.5-11.5T760-200v-560H320v440h360v120q0 17 11.5 28.5T720-160ZM360-600v-80h240v80H360Zm0 120v-80h240v80H360Zm320-120q-17 0-28.5-11.5T640-640q0-17 11.5-28.5T680-680q17 0 28.5 11.5T720-640q0 17-11.5 28.5T680-600Zm0 120q-17 0-28.5-11.5T640-520q0-17 11.5-28.5T680-560q17 0 28.5 11.5T720-520q0 17-11.5 28.5T680-480ZM240-160h360v-80H200v40q0 17 11.5 28.5T240-160Zm-40 0v-80 80Z"/></svg>`;
-        } else {
-            innerIcon = document.createElement('img');
-            innerIcon.src = iconUrl;
-        }
-
-        let icdivroot = document.createElement("div");
-        let icdivch1 = document.createElement("div");
-        icdivch1.classList.add(kl);
-        icdivroot.appendChild(icdivch1);
-        icdivroot.appendChild(innerIcon);
-
-        innerIcon.classList.add('marker-icon-img');
-
+        let stateClass = '';
         if (!this.isClient()) {
             if (this.isVeryExpired()) {
-                icdivch1.classList.add("missing");
+                stateClass = 'missing';
             } else if (this.isExpired()) {
-                icdivch1.classList.add("ghosted");
+                stateClass = 'ghosted';
             } else if (this.data.multibyte) {
-                icdivch1.classList.add("multibyte");
+                stateClass = 'multibyte';
             }
         } else if (this.data.multibyte) {
-            icdivch1.classList.add("multibyte");
+            stateClass = 'multibyte';
         }
 
-        let icon = L.divIcon({
+        return {
+            iconUrl,
+            receipt,
+            emoji: extractEmoji(this.adv?.data?.name ?? ''),
+            stateClass,
+        };
+    }
+
+    buildFullMarkerIcon(appearance) {
+        let innerIcon;
+        if (appearance.emoji) {
+            innerIcon = document.createElement('span');
+            innerIcon.innerText = appearance.emoji;
+        } else if (appearance.receipt) {
+            const hw = '20px';
+            innerIcon = document.createElement('span');
+            innerIcon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" height="${hw}" viewBox="0 -960 960 960" width="${hw}" fill="${appearance.receipt}"><path d="M240-80q-50 0-85-35t-35-85v-120h120v-560l60 60 60-60 60 60 60-60 60 60 60-60 60 60 60-60 60 60 60-60v680q0 50-35 85t-85 35H240Zm480-80q17 0 28.5-11.5T760-200v-560H320v440h360v120q0 17 11.5 28.5T720-160ZM360-600v-80h240v80H360Zm0 120v-80h240v80H360Zm320-120q-17 0-28.5-11.5T640-640q0-17 11.5-28.5T680-680q17 0 28.5 11.5T720-640q0 17-11.5 28.5T680-600Zm0 120q-17 0-28.5-11.5T640-520q0-17 11.5-28.5T680-560q17 0 28.5 11.5T720-520q0 17-11.5 28.5T680-480ZM240-160h360v-80H200v40q0 17 11.5 28.5T240-160Zm-40 0v-80 80Z"/></svg>`;
+        } else {
+            innerIcon = document.createElement('img');
+            innerIcon.src = appearance.iconUrl;
+        }
+
+        let root = document.createElement("div");
+        let pin = document.createElement("div");
+        pin.classList.add('marker-pin');
+        if (appearance.stateClass) {
+            pin.classList.add(appearance.stateClass);
+        }
+
+        innerIcon.classList.add('marker-icon-img');
+        root.appendChild(pin);
+        root.appendChild(innerIcon);
+
+        return L.divIcon({
             className: 'custom-div-icon',
-            html: icdivroot,
+            html: root,
             iconSize: [30, 42],
             iconAnchor: [15, 42]
         });
+    }
 
-        const self = this;
+    buildPointMarkerIcon(appearance) {
+        const fillColor = appearance.receipt || {
+            multibyte: '#d87dff',
+            missing: '#bb6363',
+            ghosted: '#dfae54',
+        }[appearance.stateClass] || '#607e8c';
 
-        this.marker = L.marker([this.adv.data.lat, this.adv.data.lon], { icon: icon }).addTo(map);
-        this.updateTooltip();
+        return {
+            renderer: this._meshlog.canvas_renderer,
+            radius: 5,
+            weight: 2,
+            color: 'rgba(255, 255, 255, 0.9)',
+            opacity: this.marker_opacity,
+            fillColor,
+            fillOpacity: this.marker_opacity,
+        };
+    }
+
+    buildMarkerIcon() {
+        const appearance = this.getMarkerAppearance();
+        const mode = this.getMarkerZoomMode();
+        this.marker_icon_mode = mode;
+        return mode === 'point'
+            ? this.buildPointMarkerIcon(appearance)
+            : this.buildFullMarkerIcon(appearance);
+    }
+
+    createMarkerLayer() {
+        const mode = this.getMarkerZoomMode();
+        const markerConfig = this.buildMarkerIcon();
+
+        if (mode === 'point') {
+            return L.circleMarker([this.adv.data.lat, this.adv.data.lon], markerConfig);
+        }
+
+        return L.marker([this.adv.data.lat, this.adv.data.lon], {
+            icon: markerConfig,
+        });
+    }
+
+    isPointMarker() {
+        return this.marker_icon_mode === 'point';
+    }
+
+    applyMarkerState() {
+        if (!this.marker || !this.map) return;
+
+        if (this.marker_displayed) {
+            if (!this.map.hasLayer(this.marker)) {
+                this.marker.addTo(this.map);
+            }
+        } else if (this.map.hasLayer(this.marker)) {
+            this.map.removeLayer(this.marker);
+        }
+
+        if (!this.marker_displayed) return;
+
+        if (this.isPointMarker()) {
+            this.marker.setStyle({
+                opacity: this.marker_opacity,
+                fillOpacity: this.marker_opacity,
+            });
+
+            if (this.marker_zindex >= 1000) {
+                this.marker.bringToFront();
+            } else {
+                this.marker.bringToBack();
+            }
+        } else {
+            this.marker.setOpacity(this.marker_opacity);
+            this.marker.setZIndexOffset(this.marker_zindex);
+        }
+
+        this.updateTooltip(this.marker_tooltip);
+    }
+
+    updateMarkerIcon() {
+        if (!this.marker) return;
+
+        const nextMode = this.getMarkerZoomMode();
+        if (this.marker_icon_mode === nextMode) return;
+
+        const tooltip = this.marker_tooltip;
+        const displayed = this.marker_displayed;
+        const opacity = this.marker_opacity;
+        const zindex = this.marker_zindex;
+
+        if (this.map.hasLayer(this.marker)) {
+            this.map.removeLayer(this.marker);
+        }
+
+        this.marker = this.createMarkerLayer();
+        this.marker_displayed = displayed;
+        this.marker_opacity = opacity;
+        this.marker_zindex = zindex;
+        this.marker_tooltip = tooltip;
+        this.applyMarkerState();
     }
 
     updateTooltip(tooltip = undefined) {
-        if (this.marker) {
-            this.marker.unbindTooltip();
+        if (!this.marker) return;
 
-            if (tooltip === undefined) {
-                tooltip = `<p class="tooltip-title">${this.adv.data.name} <span class="tooltip-hash">[${this.hash}]</span></p><p class="tooltip-detail">Last heard: ${this.last.data.created_at}</p>`;
-            }
-
-            if (tooltip) {
-                this.marker.bindTooltip(tooltip);
-            }
+        if (tooltip === undefined) {
+            tooltip = `<p class="tooltip-title">${this.adv.data.name} <span class="tooltip-hash">[${this.hash}]</span></p><p class="tooltip-detail">Last heard: ${this.last.data.created_at}</p>`;
         }
+
+        this.marker_tooltip = tooltip;
+        this.marker.unbindTooltip();
+
+        if (tooltip) {
+            this.marker.bindTooltip(tooltip);
+        }
+    }
+
+    setMarkerDisplayed(displayed) {
+        if (this.marker_displayed === displayed) return;
+        this.marker_displayed = displayed;
+        this.applyMarkerState();
+    }
+
+    setMarkerOpacity(opacity) {
+        if (this.marker_opacity === opacity) return;
+        this.marker_opacity = opacity;
+        this.applyMarkerState();
+    }
+
+    setMarkerZIndex(offset) {
+        if (this.marker_zindex === offset) return;
+        this.marker_zindex = offset;
+        this.applyMarkerState();
     }
 
     __removeEmojis(str) {
@@ -896,6 +1034,11 @@ class MeshLogContact extends MeshLogObject {
 
     updateMarker() {
         if (!this.marker) return;
+        this.updateMarkerIcon();
+
+        if (this.marker.setLatLng) {
+            this.marker.setLatLng([this.adv.data.lat, this.adv.data.lon]);
+        }
     }
 
     update() {
@@ -1435,8 +1578,14 @@ class MeshLog {
         this.link_layers.addTo(this.map);
 
         this.last = '2025-01-01 00:00:00';
+        this.marker_zoom_mode = this.getMapMarkerZoomMode();
 
         this.map.on("zoomend", () => {
+            const nextMarkerMode = this.getMapMarkerZoomMode();
+            if (nextMarkerMode !== this.marker_zoom_mode) {
+                this.marker_zoom_mode = nextMarkerMode;
+                Object.values(this.contacts).forEach(contact => contact.updateMarker());
+            }
             this.link_layers.eachLayer((layer) => {
                 if (!layer.checkVisibility) return;
                 layer.checkVisibility();
@@ -1471,6 +1620,10 @@ class MeshLog {
                 break;
         }
     };
+
+    getMapMarkerZoomMode() {
+        return this.map && this.map.getZoom() < 11 ? 'point' : 'full';
+    }
 
     __createCb(label, img, key, def, onchange) {
         let div = document.createElement("div");
@@ -2498,19 +2651,19 @@ class MeshLog {
                 let forcedVisible = this.visible_markers.has(v.data.id);
 
                 if (hidden && !forcedVisible) {
-                    this.map.removeLayer(v.marker);
+                    v.setMarkerDisplayed(false);
                 } else {
-                    v.marker.addTo(this.map);
+                    v.setMarkerDisplayed(true);
                 }
             }
 
             if (empty || this.visible_markers.has(v.data.id)) {
-                v.marker.setOpacity(1);
-                v.marker.setZIndexOffset(1000);
+                v.setMarkerOpacity(1);
+                v.setMarkerZIndex(1000);
                 v.updateTooltip();
             } else {
-                v.marker.setOpacity(opacity);
-                v.marker.setZIndexOffset(2);
+                v.setMarkerOpacity(opacity);
+                v.setMarkerZIndex(2);
                 v.updateTooltip('');
             }
         });
@@ -2522,7 +2675,7 @@ class MeshLog {
         let matchDist = 99999;
 
         Object.entries(this.contacts).forEach(([k,c]) => {
-            if (c.checkHash(hash) && c.adv && !c.isVeryExpired() && (!repeater || c.isRepeater())) {
+            if (c.checkHash(hash) && c.adv && (!repeater || c.isRepeater())) {
                 let current = [c.adv.data.lat, c.adv.data.lon];
                 if (current[0] == 0 && current[1] == 0) return;
 

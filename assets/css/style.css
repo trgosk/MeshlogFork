@@ -701,6 +701,33 @@ h2 {
     z-index: 2;
 }
 
+.custom-point-icon {
+    background: transparent;
+    border: 0;
+}
+
+.marker-point {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #607e8c;
+    border: solid 2px rgba(255, 255, 255, 0.9);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+    box-sizing: border-box;
+}
+
+.marker-point.multibyte {
+    background: #d87dff;
+}
+
+.marker-point.missing {
+    background: #bb6363;
+}
+
+.marker-point.ghosted {
+    background: #dfae54;
+}
+
 .tooltip-title {
     color: #111;
     font-weight: bold;
