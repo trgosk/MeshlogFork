@@ -415,7 +415,27 @@ class MeshLog {
         return $pkt->save($this);
     }
 
-    // TODO
+    private function array_path(array $array, string $path, $default = null) {
+        $keys = explode('.', $path);
+        $current = $array;
+
+        foreach ($keys as $key) {
+            if (!is_array($current) || !array_key_exists($key, $current)) {
+                return $default;
+            }
+            $current = $current[$key];
+        }
+
+        return $current;
+    }
+
+    private function appendInfluxDbLine($key, $val, $first=false) {
+        if ($val === null) return "";
+        $str = $first ? '' : ',';
+        $str .= $key . "=" . $val;
+        return $str;
+    }
+
     private function insertSelfReport($data, $reporter) {
         if (!$reporter) return;
         if (!$data['contact'] || !$data['sys']) return;
@@ -444,6 +464,18 @@ class MeshLog {
         $cname = str_replace("\"", "", $cname);
 
         $line = "mc_reporter,contact=$pubkey,name=$cname heap_total=$heap_total,heap_free=$heap_free,rssi=$rssi,uptime=$uptime";
+        $line .= $this->appendInfluxDbLine("tx_packets", $this->array_path($data, 'sys.stats.tx.packets'));
+        $line .= $this->appendInfluxDbLine("tx_packets_total", $this->array_path($data, 'sys.stats.tx.packets_total'));
+        $line .= $this->appendInfluxDbLine("tx_air_time", $this->array_path($data, 'sys.stats.tx.air_time'));
+        $line .= $this->appendInfluxDbLine("tx_air_time_total", $this->array_path($data, 'sys.stats.tx.air_time_total'));
+        $line .= $this->appendInfluxDbLine("tx_air_time_duty", $this->array_path($data, 'sys.stats.tx.air_time_duty'));
+
+        $line .= $this->appendInfluxDbLine("rx_packets", $this->array_path($data, 'sys.stats.rx.packets'));
+        $line .= $this->appendInfluxDbLine("rx_packets_total", $this->array_path($data, 'sys.stats.rx.packets_total'));
+        $line .= $this->appendInfluxDbLine("rx_air_time", $this->array_path($data, 'sys.stats.rx.air_time'));
+        $line .= $this->appendInfluxDbLine("rx_air_time_total", $this->array_path($data, 'sys.stats.rx.air_time_total'));
+        $line .= $this->appendInfluxDbLine("rx_air_time_duty", $this->array_path($data, 'sys.stats.rx.air_time_duty'));
+
         $error = $this->writeInfluxDb($line);
     }
 
