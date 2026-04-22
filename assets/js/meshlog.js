@@ -1863,6 +1863,11 @@ class MeshLog {
         }
 
         const visible = new Set();
+        const enabledReporterIds = new Set(
+            Object.values(this.reporters)
+                .filter(reporter => reporter.isEnabled())
+                .map(reporter => String(reporter.data.id))
+        );
 
         for (const reporter of Object.values(this.reporters)) {
             if (!reporter.isEnabled()) continue;
@@ -1874,6 +1879,17 @@ class MeshLog {
         }
 
         for (const contact of Object.values(this.contacts)) {
+            const reporterIds = Array.isArray(contact.data.reporter_ids)
+                ? contact.data.reporter_ids.map(id => String(id))
+                : [];
+
+            if (reporterIds.length > 0) {
+                if (reporterIds.some(id => enabledReporterIds.has(id))) {
+                    visible.add(String(contact.data.id));
+                }
+                continue;
+            }
+
             if (contact.adv?.hasVisibleReports && contact.adv.hasVisibleReports()) {
                 visible.add(String(contact.data.id));
             }

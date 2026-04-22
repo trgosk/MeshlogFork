@@ -724,6 +724,14 @@ class MeshLog {
                 t.last_heard_at,
                 t.created_at,
 
+                -- Reporter ids that have seen this contact in any advertisement
+                (
+                    SELECT COALESCE(JSON_ARRAYAGG(ar.reporter_id), JSON_ARRAY())
+                    FROM advertisements a2
+                    JOIN advertisement_reports ar ON ar.advertisement_id = a2.id
+                    WHERE a2.contact_id = t.id
+                ) AS reporter_ids,
+
                 -- Latest advertisement
                 (
                     SELECT JSON_OBJECT(
@@ -784,6 +792,7 @@ class MeshLog {
 
         $results = [];
         while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $row['reporter_ids'] = json_decode($row['reporter_ids'], true) ?? array();
             $row['telemetry'] = json_decode($row['telemetry'], true);
             $row['advertisement'] = json_decode($row['advertisement'], true);
             $results[] = $row;
