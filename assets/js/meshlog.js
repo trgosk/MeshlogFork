@@ -54,7 +54,76 @@ class MeshLogReporter extends MeshLogObject {
     }
 
     getStyle() {
-        return JSON.parse(this.data.style);
+        if (typeof this.data.style === "object" && this.data.style !== null) {
+            return this.data.style;
+        }
+
+        try {
+            return JSON.parse(this.data.style ?? "{}");
+        } catch (error) {
+            return {
+                color: this.data.style ?? "#888"
+            };
+        }
+    }
+
+    getSettingsKey() {
+        return `reporters.${this.data.id}.enabled`;
+    }
+
+    isEnabled() {
+        return Settings.getBool(this.getSettingsKey(), true);
+    }
+
+    createSettingsDom(recreate = false) {
+        if (this.dom?.settings && !recreate) return this.dom.settings;
+
+        if (this.dom?.settings?.container?.parentNode) {
+            this.dom.settings.container.parentNode.removeChild(this.dom.settings.container);
+        }
+
+        let container = document.createElement("label");
+        let input = document.createElement("input");
+        let name = document.createElement("span");
+
+        container.classList.add("reporter-filter-item");
+        input.type = "checkbox";
+        input.checked = this.isEnabled();
+        input.onchange = (e) => {
+            Settings.set(this.getSettingsKey(), e.target.checked);
+            this._meshlog.onReporterFilterChanged();
+        };
+
+        name.classList.add("reporter-filter-name");
+        name.innerText = this.data.name;
+
+        container.append(input);
+        container.append(name);
+
+        this.dom = this.dom ?? {};
+        this.dom.settings = {
+            container,
+            input,
+            name,
+        };
+
+        this.updateSettingsDom();
+        return this.dom.settings;
+    }
+
+    updateSettingsDom() {
+        if (!this.dom?.settings) return;
+
+        const style = this.getStyle();
+        const textColor = style.color ?? "#888";
+        const strokeColor = style.stroke ?? textColor;
+        const strokeWeight = style.weight ?? "1px";
+
+        this.dom.settings.input.checked = this.isEnabled();
+        this.dom.settings.container.style.color = textColor;
+        this.dom.settings.name.style.color = textColor;
+        this.dom.settings.container.style.border = `solid ${strokeWeight} ${strokeColor}`;
+        this.dom.settings.container.classList.toggle("disabled", !this.isEnabled());
     }
 
     getContactId() {
@@ -115,6 +184,11 @@ class MeshLogContact extends MeshLogObject {
         this.last = null;
         this.telemetry = null;
         this.marker = null;
+        this.marker_icon_mode = null;
+        this.marker_displayed = true;
+        this.marker_opacity = 1;
+        this.marker_zindex = 2;
+        this.marker_tooltip = null;
 
         this.flags.dupe = false;
         this.hash = data.public_key.substr(0, 2 * data.hash_size).toLowerCase();
@@ -252,6 +326,7 @@ class MeshLogContact extends MeshLogObject {
 
                 let reporter = this._meshlog.reporters[r.data.reporter_id] ?? false;
                 if (!reporter) return;
+                if (!reporter.isEnabled()) return;
                 
 
                 // If message is from this contact, neighbor is first path hash
@@ -376,6 +451,71 @@ class MeshLogContact extends MeshLogObject {
         this.neighbors_visible = false;
     }
 
+    getQrContents() {
+        const name = encodeURIComponent(this.adv?.data?.name ?? this.data.name ?? "");
+        const publicKey = encodeURIComponent(this.data.public_key ?? "");
+        const type = encodeURIComponent(this.adv?.data?.type ?? "");
+        return `meshcore://contact/add?name=${name}&public_key=${publicKey}&type=${type}`;
+    }
+
+    copyQrContents(button = null) {
+        const contents = this.getQrContents();
+        const resetLabel = button ? button.innerText : "";
+
+        const onSuccess = () => {
+            if (!button) return;
+            button.innerText = "Copied";
+            button.classList.add("active");
+            setTimeout(() => {
+                button.innerText = resetLabel;
+                button.classList.remove("active");
+            }, 1200);
+        };
+
+        if (navigator.clipboard?.writeText) {
+            navigator.clipboard.writeText(contents)
+                .then(onSuccess)
+                .catch(() => {
+                    window.prompt("Copy link:", contents);
+                });
+            return;
+        }
+
+        window.prompt("Copy link:", contents);
+    }
+
+    ensureQrCode() {
+        if (!this.dom?.detailsQr) return;
+
+        const contents = this.getQrContents();
+        if (this.dom.detailsQr.dataset.contents === contents && this.dom.detailsQr.childNodes.length > 0) {
+            return;
+        }
+
+        while (this.dom.detailsQr.firstChild) {
+            this.dom.detailsQr.removeChild(this.dom.detailsQr.firstChild);
+        }
+
+        this.dom.detailsQr.dataset.contents = contents;
+
+        if (typeof QRCode === "undefined") {
+            let fallback = document.createElement("div");
+            fallback.classList.add("detail-qr-fallback");
+            fallback.innerText = contents;
+            this.dom.detailsQr.append(fallback);
+            return;
+        }
+
+        new QRCode(this.dom.detailsQr, {
+            text: contents,
+            width: 192,
+            height: 192,
+            colorDark: "#f5f5f5",
+            colorLight: "#262626",
+            correctLevel: QRCode.CorrectLevel.M
+        });
+    }
+
     createDom(recreate = false) {
         if (this.dom && !recreate) return this.dom;
 
@@ -394,6 +534,7 @@ class MeshLogContact extends MeshLogObject {
 
         let imType = document.createElement("img");
         let spDate = document.createElement("span");
+        let spPrefix = document.createElement("span");
         let spHash = document.createElement("span");
         let spName = document.createElement("span");
         let spTelemetry = document.createElement("span");
@@ -408,27 +549,40 @@ class MeshLogContact extends MeshLogObject {
         divContact.append(imType);
         divContact.append(spHash);
         divContact.append(spName);
+        divContact.append(spPrefix);
         divContact.append(spTelemetry);
 
         let divDetailsType = document.createElement("div");
         let divDetailsFirst = document.createElement("div");
         let divDetailsKey = document.createElement("div");
         let divDetailsTelemetry = document.createElement("div");
+        let divDetailsActions = document.createElement("div");
+        let divDetailsQr = document.createElement("div");
         let btnShowNeighbors = document.createElement("button");
+        let btnShowQr = document.createElement("button");
+        let btnCopyQr = document.createElement("button");
 
         divDetails.append(divDetailsType);
         divDetails.append(divDetailsFirst);
         divDetails.append(divDetailsKey);
         divDetails.append(divDetailsTelemetry);
+        divDetails.append(divDetailsActions);
+        divDetails.append(divDetailsQr);
 
         if (!this.isClient()) {
-            divDetails.append(btnShowNeighbors);
+            divDetailsActions.append(btnShowNeighbors);
         }
+
+        divDetailsActions.append(btnShowQr);
+        divDetailsActions.append(btnCopyQr);
 
         divContainer.append(divContact);
         divContainer.append(divDetails);
 
         const self = this;
+        divDetailsActions.classList.add("detail-actions");
+        divDetailsQr.classList.add("detail-qr");
+        divDetailsQr.hidden = true;
         btnShowNeighbors.classList.add('btn');
         btnShowNeighbors.innerText = "Show Neighbors";
         btnShowNeighbors.onclick = (e) => {
@@ -447,6 +601,30 @@ class MeshLogContact extends MeshLogObject {
             }
         }
 
+        btnShowQr.classList.add('btn');
+        btnShowQr.innerText = "Show QR";
+        btnShowQr.onclick = (e) => {
+            const visible = !divDetailsQr.hidden;
+
+            if (visible) {
+                divDetailsQr.hidden = true;
+                e.target.innerText = "Show QR";
+                e.target.classList.remove("active");
+                return;
+            }
+
+            self.ensureQrCode();
+            divDetailsQr.hidden = false;
+            e.target.innerText = "Hide QR";
+            e.target.classList.add("active");
+        };
+
+        btnCopyQr.classList.add('btn');
+        btnCopyQr.innerText = "Copy Link";
+        btnCopyQr.onclick = () => {
+            self.copyQrContents(btnCopyQr);
+        };
+
         this.dom = {
             container: divContainer,
             contact: divContact,
@@ -455,6 +633,7 @@ class MeshLogContact extends MeshLogObject {
             contactDate: spDate,
             contactHash: spHash,
             contactName: spName,
+            contactPrefix: spPrefix,
             contactIcon: imType,
             contactTelemetry: spTelemetry,
 
@@ -462,7 +641,11 @@ class MeshLogContact extends MeshLogObject {
             detailsFirst: divDetailsFirst,
             detailsKey: divDetailsKey,
             detailsTelemetry: divDetailsTelemetry,
-            btnShowNeighbors: btnShowNeighbors
+            detailsActions: divDetailsActions,
+            detailsQr: divDetailsQr,
+            btnShowNeighbors: btnShowNeighbors,
+            btnShowQr: btnShowQr,
+            btnCopyQr: btnCopyQr
         };
 
         divContact.instance = this;
@@ -477,8 +660,16 @@ class MeshLogContact extends MeshLogObject {
             return
         }
 
+        this.marker = this.createMarkerLayer();
+        this.applyMarkerState();
+    }
+
+    getMarkerZoomMode() {
+        return this.map && this.map.getZoom() < 11 ? 'point' : 'full';
+    }
+
+    getMarkerAppearance() {
         let iconUrl = 'assets/img/tower.svg';
-        let kl = 'marker-pin';
         let receipt = false;
 
         if (this.isClient()) {
@@ -502,63 +693,192 @@ class MeshLogContact extends MeshLogObject {
             const emojiRegex = /\p{Extended_Pictographic}/u;
             const match = str.match(emojiRegex);
             return match ? match[0] : '';
-        }
+        };
 
-        let innerIcon;
-        let emoji = extractEmoji(this.adv.data.name);
-        if (emoji) {
-            innerIcon = document.createElement('span');
-            innerIcon.innerText = emoji;
-        } else if (receipt) {
-            const hw = '20px';
-            innerIcon = document.createElement('span');
-            innerIcon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" height="${hw}" viewBox="0 -960 960 960" width="${hw}" fill="${receipt}"><path d="M240-80q-50 0-85-35t-35-85v-120h120v-560l60 60 60-60 60 60 60-60 60 60 60-60 60 60 60-60 60 60 60-60v680q0 50-35 85t-85 35H240Zm480-80q17 0 28.5-11.5T760-200v-560H320v440h360v120q0 17 11.5 28.5T720-160ZM360-600v-80h240v80H360Zm0 120v-80h240v80H360Zm320-120q-17 0-28.5-11.5T640-640q0-17 11.5-28.5T680-680q17 0 28.5 11.5T720-640q0 17-11.5 28.5T680-600Zm0 120q-17 0-28.5-11.5T640-520q0-17 11.5-28.5T680-560q17 0 28.5 11.5T720-520q0 17-11.5 28.5T680-480ZM240-160h360v-80H200v40q0 17 11.5 28.5T240-160Zm-40 0v-80 80Z"/></svg>`;
-        } else {
-            innerIcon = document.createElement('img');
-            innerIcon.src = iconUrl;
-        }
-
-        let icdivroot = document.createElement("div");
-        let icdivch1 = document.createElement("div");
-        icdivch1.classList.add(kl);
-        icdivroot.appendChild(icdivch1);
-        icdivroot.appendChild(innerIcon);
-
-        innerIcon.classList.add('marker-icon-img');
-
+        let stateClass = '';
         if (!this.isClient()) {
             if (this.isVeryExpired()) {
-                icdivch1.classList.add("missing");
+                stateClass = 'missing';
             } else if (this.isExpired()) {
-                icdivch1.classList.add("ghosted");
+                stateClass = 'ghosted';
+            } else if (this.data.multibyte) {
+                stateClass = 'multibyte';
             }
+        } else if (this.data.multibyte) {
+            stateClass = 'multibyte';
         }
 
-        let icon = L.divIcon({
+        return {
+            iconUrl,
+            receipt,
+            emoji: extractEmoji(this.adv?.data?.name ?? ''),
+            stateClass,
+        };
+    }
+
+    buildFullMarkerIcon(appearance) {
+        let innerIcon;
+        if (appearance.emoji) {
+            innerIcon = document.createElement('span');
+            innerIcon.innerText = appearance.emoji;
+        } else if (appearance.receipt) {
+            const hw = '20px';
+            innerIcon = document.createElement('span');
+            innerIcon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" height="${hw}" viewBox="0 -960 960 960" width="${hw}" fill="${appearance.receipt}"><path d="M240-80q-50 0-85-35t-35-85v-120h120v-560l60 60 60-60 60 60 60-60 60 60 60-60 60 60 60-60 60 60 60-60v680q0 50-35 85t-85 35H240Zm480-80q17 0 28.5-11.5T760-200v-560H320v440h360v120q0 17 11.5 28.5T720-160ZM360-600v-80h240v80H360Zm0 120v-80h240v80H360Zm320-120q-17 0-28.5-11.5T640-640q0-17 11.5-28.5T680-680q17 0 28.5 11.5T720-640q0 17-11.5 28.5T680-600Zm0 120q-17 0-28.5-11.5T640-520q0-17 11.5-28.5T680-560q17 0 28.5 11.5T720-520q0 17-11.5 28.5T680-480ZM240-160h360v-80H200v40q0 17 11.5 28.5T240-160Zm-40 0v-80 80Z"/></svg>`;
+        } else {
+            innerIcon = document.createElement('img');
+            innerIcon.src = appearance.iconUrl;
+        }
+
+        let root = document.createElement("div");
+        let pin = document.createElement("div");
+        pin.classList.add('marker-pin');
+        if (appearance.stateClass) {
+            pin.classList.add(appearance.stateClass);
+        }
+
+        innerIcon.classList.add('marker-icon-img');
+        root.appendChild(pin);
+        root.appendChild(innerIcon);
+
+        return L.divIcon({
             className: 'custom-div-icon',
-            html: icdivroot,
+            html: root,
             iconSize: [30, 42],
             iconAnchor: [15, 42]
         });
+    }
 
-        const self = this;
+    buildPointMarkerIcon(appearance) {
+        const fillColor = appearance.receipt || {
+            multibyte: '#d87dff',
+            missing: '#bb6363',
+            ghosted: '#dfae54',
+        }[appearance.stateClass] || '#607e8c';
 
-        this.marker = L.marker([this.adv.data.lat, this.adv.data.lon], { icon: icon }).addTo(map);
-        this.updateTooltip();
+        return {
+            renderer: this._meshlog.canvas_renderer,
+            radius: 5,
+            weight: 2,
+            color: 'rgba(255, 255, 255, 0.9)',
+            opacity: this.marker_opacity,
+            fillColor,
+            fillOpacity: this.marker_opacity,
+        };
+    }
+
+    buildMarkerIcon() {
+        const appearance = this.getMarkerAppearance();
+        const mode = this.getMarkerZoomMode();
+        this.marker_icon_mode = mode;
+        return mode === 'point'
+            ? this.buildPointMarkerIcon(appearance)
+            : this.buildFullMarkerIcon(appearance);
+    }
+
+    createMarkerLayer() {
+        const mode = this.getMarkerZoomMode();
+        const markerConfig = this.buildMarkerIcon();
+
+        if (mode === 'point') {
+            return L.circleMarker([this.adv.data.lat, this.adv.data.lon], markerConfig);
+        }
+
+        return L.marker([this.adv.data.lat, this.adv.data.lon], {
+            icon: markerConfig,
+        });
+    }
+
+    isPointMarker() {
+        return this.marker_icon_mode === 'point';
+    }
+
+    applyMarkerState() {
+        if (!this.marker || !this.map) return;
+
+        if (this.marker_displayed) {
+            if (!this.map.hasLayer(this.marker)) {
+                this.marker.addTo(this.map);
+            }
+        } else if (this.map.hasLayer(this.marker)) {
+            this.map.removeLayer(this.marker);
+        }
+
+        if (!this.marker_displayed) return;
+
+        if (this.isPointMarker()) {
+            this.marker.setStyle({
+                opacity: this.marker_opacity,
+                fillOpacity: this.marker_opacity,
+            });
+
+            if (this.marker_zindex >= 1000) {
+                this.marker.bringToFront();
+            } else {
+                this.marker.bringToBack();
+            }
+        } else {
+            this.marker.setOpacity(this.marker_opacity);
+            this.marker.setZIndexOffset(this.marker_zindex);
+        }
+
+        this.updateTooltip(this.marker_tooltip);
+    }
+
+    updateMarkerIcon() {
+        if (!this.marker) return;
+
+        const nextMode = this.getMarkerZoomMode();
+        if (this.marker_icon_mode === nextMode) return;
+
+        const tooltip = this.marker_tooltip;
+        const displayed = this.marker_displayed;
+        const opacity = this.marker_opacity;
+        const zindex = this.marker_zindex;
+
+        if (this.map.hasLayer(this.marker)) {
+            this.map.removeLayer(this.marker);
+        }
+
+        this.marker = this.createMarkerLayer();
+        this.marker_displayed = displayed;
+        this.marker_opacity = opacity;
+        this.marker_zindex = zindex;
+        this.marker_tooltip = tooltip;
+        this.applyMarkerState();
     }
 
     updateTooltip(tooltip = undefined) {
-        if (this.marker) {
-            this.marker.unbindTooltip();
+        if (!this.marker) return;
 
-            if (tooltip === undefined) {
-                tooltip = `<p class="tooltip-title">${this.adv.data.name} <span class="tooltip-hash">[${this.hash}]</span></p><p class="tooltip-detail">Last heard: ${this.last.data.created_at}</p>`;
-            }
-
-            if (tooltip) {
-                this.marker.bindTooltip(tooltip);
-            }
+        if (tooltip === undefined) {
+            tooltip = `<p class="tooltip-title">${this.adv.data.name} <span class="tooltip-hash">[${this.hash}]</span></p><p class="tooltip-detail">Last heard: ${this.last.data.created_at}</p>`;
         }
+
+        this.marker_tooltip = tooltip;
+        this.marker.unbindTooltip();
+
+        if (tooltip) {
+            this.marker.bindTooltip(tooltip);
+        }
+    }
+
+    setMarkerDisplayed(displayed) {
+        if (this.marker_displayed === displayed) return;
+        this.marker_displayed = displayed;
+        this.applyMarkerState();
+    }
+
+    setMarkerOpacity(opacity) {
+        if (this.marker_opacity === opacity) return;
+        this.marker_opacity = opacity;
+        this.applyMarkerState();
+    }
+
+    setMarkerZIndex(offset) {
+        if (this.marker_zindex === offset) return;
+        this.marker_zindex = offset;
+        this.applyMarkerState();
     }
 
     __removeEmojis(str) {
@@ -575,9 +895,12 @@ class MeshLogContact extends MeshLogObject {
         let hashstr = this.hash;
 
         this.dom.container.dataset.type = this.adv.data.type;
+        this.dom.container.dataset.contactId = this.data.id;
         this.dom.container.dataset.time = this.last.time;
         this.dom.container.dataset.name = this.__removeEmojis(this.adv.data.name).trim();
         this.dom.container.dataset.hash = hashstr;
+        this.dom.container.dataset.pubkey = this.data.public_key;
+        this.dom.container.dataset.multibyte = this.data.multibyte;
         this.dom.container.dataset.first_seen = new Date(this.data.created_at).getTime();
 
         this.dom.details.hidden = !this.expanded;
@@ -600,6 +923,20 @@ class MeshLogContact extends MeshLogObject {
             this.dom.contactHash.classList.remove("prio-5");
         }
 
+        let sentAt = new Date(this.adv.data.sent_at).getTime();
+        let createdAt = new Date(this.adv.data.created_at).getTime();
+        if (Math.abs(sentAt - createdAt) > 1000 * 60 * 30) {
+            this.dom.contactPrefix.textContent = "⚠️";
+            this.dom.contactPrefix.classList.add('warn-icon')
+            createTooltip(this.dom.contactPrefix, `Clock out of sync. Sender time: ${this.adv.data.sent_at}`);
+        } else {
+            this.dom.contactPrefix.innerHTML = "";
+            this.dom.contactPrefix.classList.remove('warn-icon');
+        }
+
+        if (this.data.multibyte) {
+            this.dom.contactName.classList.add('t-mb');
+        }
 
         let type = '';
         if (this.isClient()) {
@@ -697,6 +1034,11 @@ class MeshLogContact extends MeshLogObject {
 
     updateMarker() {
         if (!this.marker) return;
+        this.updateMarkerIcon();
+
+        if (this.marker.setLatLng) {
+            this.marker.setLatLng([this.adv.data.lat, this.adv.data.lon]);
+        }
     }
 
     update() {
@@ -757,13 +1099,20 @@ class MeshLogReport {
     }
 
     showPath() {
+        if (!this.isEnabled()) return;
         let sender = this._meshlog.contacts[this.contact_id] ?? false;
         let receiver = this._meshlog.reporters[this.data.reporter_id];
+        if (!receiver) return;
         this._meshlog.showPath(this.data.id, this.data.path, sender, receiver);
     }
 
     hidePath() {
         this._meshlog.hidePath(this.data.id);
+    }
+
+    isEnabled() {
+        let reporter = this._meshlog.reporters[this.data.reporter_id] ?? false;
+        return reporter ? reporter.isEnabled() : false;
     }
 
     createDom(recreate = false) {
@@ -776,6 +1125,7 @@ class MeshLogReport {
 
         let reporter = this._meshlog.reporters[this.data.reporter_id] ?? false;
         if (!reporter) return null;
+        if (!reporter.isEnabled()) return null;
 
         let divReport = document.createElement("div");
         let spDate = document.createElement("span");
@@ -821,6 +1171,7 @@ class MeshLogReport {
     static onmouseout(e) {
         if (this.parent.dom.input.show.checked) return;
         this.hidePath();
+        this._meshlog.updatePaths();
     }
 
     static oncontextmenu(e) {
@@ -897,6 +1248,18 @@ class MeshLogReportedObject extends MeshLogObject {
         }
     }
 
+    getVisibleReports() {
+        return this.reports.filter(report => report.isEnabled());
+    }
+
+    hasVisibleReports() {
+        return this.getVisibleReports().length > 0;
+    }
+
+    isSenderVisible() {
+        return this._meshlog.isContactVisible(this.data.contact_id, this.data.name);
+    }
+
     // Override!
     getId()   { return `?_${this.data.id}`; }
     getDate() { return {text: "Not Implemented", classList: []}; } // date - 2025-10-10 10:00:00
@@ -961,7 +1324,7 @@ class MeshLogReportedObject extends MeshLogObject {
         // Check message times
         let sentAt = new Date(this.data.sent_at).getTime();
         let createdAt = new Date(this.data.created_at).getTime();
-        if (Math.abs(sentAt - createdAt) > 1000 * 60 * 15) {
+        if (Math.abs(sentAt - createdAt) > 1000 * 60 * 30) {
             spPrefix.textContent = "⚠️";
             spPrefix.classList.add('warn-icon')
             createTooltip(spPrefix, `Clock out of sync. Sender time: ${this.data.sent_at}`);
@@ -976,6 +1339,11 @@ class MeshLogReportedObject extends MeshLogObject {
         spText.classList.add(...text.classList);
         spText.innerHTML = text.text.linkify();
 
+        if (this.data.hash_size > 1) {
+            spName.classList.add('t-mb');
+            spTag.classList.add('t-mb');
+        }
+
         if (text.text) {
             // message
             divLine1.append(spDate);
@@ -986,7 +1354,7 @@ class MeshLogReportedObject extends MeshLogObject {
         } else {
             // advert
             divLine1.append(spDate);
-            // divLine1.append(spPrefix);
+            divLine1.append(spPrefix);
             // divLine1.append(spTag);
             divLine1.append(spName);
         }
@@ -1022,18 +1390,19 @@ class MeshLogReportedObject extends MeshLogObject {
 
         this.dom.container.hidden = !this.isVisible();
         this.dom.reports.hidden = !this.expanded;
+        const visibleReports = this.getVisibleReports();
+
+        while (this.dom.reports.firstChild) {
+            this.dom.reports.removeChild(this.dom.reports.firstChild);
+        }
 
         if (this.expanded) {
-            for (let i=0; i<this.reports.length; i++) {
-                let report = this.reports[i];
+            for (let i=0; i<visibleReports.length; i++) {
+                let report = visibleReports[i];
                 let dom = report.createDom(false);
                 if (dom) {
                     this.dom.reports.append(dom.container);
                 }
-            }
-        } else {
-            while (this.dom.reports.firstChild) {
-                this.dom.reports.removeChild(this.dom.reports.firstChild);
             }
         }
     }
@@ -1049,8 +1418,9 @@ class MeshLogReportedObject extends MeshLogObject {
 
     static onmouseover(e) {
         // show paths
-        for (let i=0;i<this.reports.length;i++) {
-            this.reports[i].showPath();
+        const visibleReports = this.getVisibleReports();
+        for (let i=0;i<visibleReports.length;i++) {
+            visibleReports[i].showPath();
         }
         this._meshlog.updatePaths();
     }
@@ -1058,8 +1428,9 @@ class MeshLogReportedObject extends MeshLogObject {
     static onmouseout(e) {
         // hide path
         if (this.dom.input.show.checked) return;
-        for (let i=0;i<this.reports.length;i++) {
-            this.reports[i].hidePath();
+        const visibleReports = this.getVisibleReports();
+        for (let i=0;i<visibleReports.length;i++) {
+            visibleReports[i].hidePath();
         }
         this._meshlog.updatePaths();
     }
@@ -1073,7 +1444,7 @@ class MeshLogAdvertisement extends MeshLogReportedObject {
     getName() { return {text: this.data.name, classList: []}; }
     getText() { return {text: "", classList: []}; }
     getPathTag() { return "ADV"; }
-    isVisible() { return Settings.getBool('messageTypes.advertisements', true); }
+    isVisible() { return Settings.getBool('messageTypes.advertisements', true) && this.hasVisibleReports() && this.isSenderVisible(); }
 }
 
 class MeshLogChannelMessage extends MeshLogReportedObject {
@@ -1094,7 +1465,7 @@ class MeshLogChannelMessage extends MeshLogReportedObject {
         let chid = this.data.channel_id;
         let ch = this._meshlog.channels[chid] ?? false;
         if (ch) ch = ch.isEnabled();
-        return Settings.getBool('messageTypes.channel', true) && ch;
+        return Settings.getBool('messageTypes.channel', true) && ch && this.hasVisibleReports() && this.isSenderVisible();
     }
 }
 
@@ -1102,8 +1473,9 @@ class MeshLogDirectMessage extends MeshLogReportedObject {
     static idPrefix = "d";
     getTag()  {
         let text = '→ unknown';
-        if (this.reports.length > 0) {
-            let repid = this.reports[0].data.reporter_id;
+        let reports = this.getVisibleReports();
+        if (reports.length > 0) {
+            let repid = reports[0].data.reporter_id;
             let reporter = this._meshlog.reporters[repid] ?? false;
             if (reporter) {
                 text = `→ ${reporter.data.name}`;
@@ -1117,7 +1489,7 @@ class MeshLogDirectMessage extends MeshLogReportedObject {
     getName() { return {text: `${this.data.name}`, classList: ['t-bright'], background: str2color(this.data.name) }; }
     getText() { return {text: this.data.message, classList: ['t-white']}; }
     getPathTag() { return "DIR"; }
-    isVisible() { return Settings.getBool('messageTypes.direct', false); }
+    isVisible() { return Settings.getBool('messageTypes.direct', false) && this.hasVisibleReports() && this.isSenderVisible(); }
 }
 
 class MeshLogLinkLayer {
@@ -1131,7 +1503,7 @@ class MeshLogLinkLayer {
 
 
 class MeshLog {
-    constructor(map, logsid, contactsid, stypesid, sreportersid, scontactsid, warningid, errorid, contextmenuid) {
+    constructor(map, logsid, contactsid, stypesid, sreporterfilterid, sreportersid, scontactsid, warningid, errorid, contextmenuid) {
         this.reporters = {};
         this.contacts = {};
         this.channels = {};
@@ -1147,6 +1519,8 @@ class MeshLog {
         this.canvas_renderer = L.canvas({ padding: 0.5 });
         this.dom_logs = document.getElementById(logsid);
         this.dom_contacts = document.getElementById(contactsid);
+        this.dom_logs_filter_warning = document.getElementById("logs-filter-warning");
+        this.dom_contacts_filter_warning = document.getElementById("contacts-filter-warning");
         this.dom_warning = document.getElementById(warningid);
         this.dom_error = document.getElementById(errorid);
         this.dom_contextmenu = document.getElementById(contextmenuid);
@@ -1173,6 +1547,7 @@ class MeshLog {
          
 
         this.dom_settings_types = document.getElementById(stypesid);
+        this.dom_settings_reporter_filter = document.getElementById(sreporterfilterid);
         this.dom_settings_reporters = document.getElementById(sreportersid);
         this.dom_settings_contacts = document.getElementById(scontactsid);
 
@@ -1186,12 +1561,16 @@ class MeshLog {
         this.dom_logs.addEventListener('mouseout', this.handleMouseEvent);
         this.dom_logs.addEventListener("contextmenu", this.handleMouseEvent);
 
+        this.dom_warning.dataset.compact = "1";
+
         const menu = this.dom_contextmenu;
         document.addEventListener('click', function () {
             menu.style.display = 'none'; // Hide when clicking anywhere
         });
 
         this.__init_message_types();
+        this.__init_reporter_filter();
+        this.__init_filter_warnings();
         this.__init_contact_order();
         this.__init_contact_types();
         this.__init_warnings();
@@ -1199,6 +1578,19 @@ class MeshLog {
         this.link_layers.addTo(this.map);
 
         this.last = '2025-01-01 00:00:00';
+        this.marker_zoom_mode = this.getMapMarkerZoomMode();
+
+        this.map.on("zoomend", () => {
+            const nextMarkerMode = this.getMapMarkerZoomMode();
+            if (nextMarkerMode !== this.marker_zoom_mode) {
+                this.marker_zoom_mode = nextMarkerMode;
+                Object.values(this.contacts).forEach(contact => contact.updateMarker());
+            }
+            this.link_layers.eachLayer((layer) => {
+                if (!layer.checkVisibility) return;
+                layer.checkVisibility();
+            });
+        });
     }
 
     handleMouseEvent(e) {
@@ -1229,6 +1621,10 @@ class MeshLog {
         }
     };
 
+    getMapMarkerZoomMode() {
+        return this.map && this.map.getZoom() < 11 ? 'point' : 'full';
+    }
+
     __createCb(label, img, key, def, onchange) {
         let div = document.createElement("div");
         let cb = document.createElement("input");
@@ -1236,6 +1632,7 @@ class MeshLog {
         let ico = document.createElement("img");
 
         cb.type = "checkbox";
+        cb.dataset.settingKey = key;
         cb.checked = Settings.getBool(key, def);
         console.log('create cb: ', key, cb.checked);
         cb.onchange = (e) => {
@@ -1265,6 +1662,7 @@ class MeshLog {
         let inp = document.createElement("input");
 
         inp.type = "text";
+        inp.dataset.settingKey = key;
         inp.value = localStorage[key] ?? def;
         inp.oninput = (e) => {
             localStorage[key] = e.target.value;
@@ -1278,8 +1676,349 @@ class MeshLog {
         return div;
     }
 
+    getReportLimitSettingKey() {
+        return 'reporters.reportLimit';
+    }
+
+    getReportLimitSetting() {
+        const raw = Settings.get(this.getReportLimitSettingKey(), 1);
+        const parsed = parseInt(raw, 10);
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+    }
+
+    setReportLimitSetting(value) {
+        const parsed = parseInt(String(value ?? '').trim(), 10);
+        const normalized = Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+        Settings.set(this.getReportLimitSettingKey(), normalized);
+        return normalized;
+    }
+
+    __init_filter_warnings() {
+        const buildWarning = (container, onclick) => {
+            if (!container) return null;
+
+            let text = document.createElement("span");
+            let button = document.createElement("button");
+
+            text.classList.add("filter-warning-text");
+            button.classList.add("btn", "filter-warning-btn");
+            button.type = "button";
+            button.innerText = "Clear Filters";
+            button.onclick = onclick;
+
+            container.append(text);
+            container.append(button);
+
+            return { container, text, button };
+        };
+
+        this.filter_warnings = {
+            logs: buildWarning(this.dom_logs_filter_warning, () => this.clearFilterWarnings()),
+            contacts: buildWarning(this.dom_contacts_filter_warning, () => this.clearFilterWarnings()),
+        };
+    }
+
+    __init_reporter_filter() {
+        let summary = document.createElement("span");
+        let button = document.createElement("button");
+        let panel = document.createElement("div");
+
+        summary.classList.add("reporter-filter-summary");
+        button.classList.add("btn", "reporter-filter-toggle");
+        button.type = "button";
+        button.innerText = "Settings";
+        panel.classList.add("reporter-filter-panel");
+        panel.hidden = true;
+
+        button.onclick = (e) => {
+            e.stopPropagation();
+            panel.hidden = !panel.hidden;
+        };
+
+        panel.onclick = (e) => {
+            e.stopPropagation();
+        };
+
+        this.dom_settings_reporter_filter.onclick = (e) => {
+            e.stopPropagation();
+        };
+
+        document.addEventListener("click", () => {
+            panel.hidden = true;
+        });
+
+        this.dom_settings_reporter_filter.append(summary);
+        this.dom_settings_reporter_filter.append(button);
+        this.dom_settings_reporter_filter.append(panel);
+
+        this.dom_reporter_filter = {
+            summary,
+            button,
+            panel,
+        };
+
+        this.updateReporterFilterDom();
+    }
+
+    updateReporterFilterDom() {
+        if (!this.dom_reporter_filter) return;
+
+        const reporters = Object.values(this.reporters)
+            .sort((a, b) => a.data.name.localeCompare(b.data.name));
+        const enabled = reporters.filter(reporter => reporter.isEnabled()).length;
+
+        this.dom_reporter_filter.summary.innerText = `Enabled reporters: ${enabled}/${reporters.length}`;
+
+        while (this.dom_reporter_filter.panel.firstChild) {
+            this.dom_reporter_filter.panel.removeChild(this.dom_reporter_filter.panel.firstChild);
+        }
+
+        let limitContainer = document.createElement("div");
+        let limitLabel = document.createElement("span");
+        let limitInput = document.createElement("input");
+        const currentLimit = this.getReportLimitSetting();
+
+        limitContainer.classList.add("reporter-filter-limit");
+        limitLabel.classList.add("reporter-filter-limit-label");
+        limitLabel.innerText = "Max reports per object per reporter";
+        limitInput.type = "text";
+        limitInput.inputMode = "numeric";
+        limitInput.value = currentLimit;
+        limitInput.placeholder = "1";
+
+        limitInput.onchange = () => {
+            const previousLimit = this.getReportLimitSetting();
+            const nextLimit = this.setReportLimitSetting(limitInput.value);
+            limitInput.value = nextLimit;
+
+            if (nextLimit !== previousLimit) {
+                this.reloadAllData();
+            }
+        };
+
+        limitInput.onkeydown = (e) => {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                limitInput.blur();
+            }
+        };
+
+        limitContainer.append(limitLabel);
+        limitContainer.append(limitInput);
+        this.dom_reporter_filter.panel.append(limitContainer);
+
+        for (const reporter of reporters) {
+            const dom = reporter.createSettingsDom(false);
+            reporter.updateSettingsDom();
+            this.dom_reporter_filter.panel.append(dom.container);
+        }
+    }
+
+    clearReporterFiltersState() {
+        for (const reporter of Object.values(this.reporters)) {
+            Settings.set(reporter.getSettingsKey(), true);
+        }
+    }
+
+    clearContactListFiltersState() {
+        const keys = [
+            'contactTypes.clients',
+            'contactTypes.repeaters',
+            'contactTypes.rooms',
+            'contactTypes.sensors',
+        ];
+
+        for (const key of keys) {
+            Settings.set(key, true);
+        }
+        Settings.set('contactFilter.value', '');
+    }
+
+    syncContactFilterControls() {
+        const nodes = this.dom_settings_contacts.querySelectorAll('[data-setting-key]');
+
+        for (const node of nodes) {
+            const key = node.dataset.settingKey;
+            if (!key) continue;
+
+            if (node.type === "checkbox") {
+                node.checked = Settings.getBool(key, true);
+            } else if (node.type === "text") {
+                node.value = Settings.get(key, '');
+            }
+        }
+    }
+
+    clearFilterWarnings() {
+        this.clearReporterFiltersState();
+        this.clearContactListFiltersState();
+        this.syncContactFilterControls();
+        this.updateReporterFilterDom();
+        this.onReporterFilterChanged();
+    }
+
+    getVisibleContactIdsByReporter() {
+        if (!this.hasActiveReporterFilter()) {
+            return new Set(Object.values(this.contacts).map(contact => String(contact.data.id)));
+        }
+
+        const visible = new Set();
+        const enabledReporterIds = new Set(
+            Object.values(this.reporters)
+                .filter(reporter => reporter.isEnabled())
+                .map(reporter => String(reporter.data.id))
+        );
+
+        for (const reporter of Object.values(this.reporters)) {
+            if (!reporter.isEnabled()) continue;
+
+            const contactId = reporter.getContactId();
+            if (contactId !== -1) {
+                visible.add(String(contactId));
+            }
+        }
+
+        for (const contact of Object.values(this.contacts)) {
+            const reporterIds = Array.isArray(contact.data.reporter_ids)
+                ? contact.data.reporter_ids.map(id => String(id))
+                : [];
+
+            if (reporterIds.length > 0) {
+                if (reporterIds.some(id => enabledReporterIds.has(id))) {
+                    visible.add(String(contact.data.id));
+                }
+                continue;
+            }
+
+            if (contact.adv?.hasVisibleReports && contact.adv.hasVisibleReports()) {
+                visible.add(String(contact.data.id));
+            }
+        }
+
+        for (const msg of Object.values(this.messages)) {
+            if (!msg.hasVisibleReports || !msg.hasVisibleReports()) continue;
+            if (msg.data.contact_id === undefined || msg.data.contact_id === null) continue;
+            visible.add(String(msg.data.contact_id));
+        }
+
+        return visible;
+    }
+
+    refreshVisibleNeighborPaths() {
+        const visibleContactIds = this.getVisibleContactIdsByReporter();
+        const visibleNeighbors = Object.values(this.contacts)
+            .filter(contact => contact.neighbors_visible);
+
+        for (const contact of visibleNeighbors) {
+            const prefix = contact.getLayerDescPrefix();
+            Object.keys(this.layer_descs).forEach(key => {
+                if (key.startsWith(prefix)) {
+                    delete this.layer_descs[key];
+                }
+            });
+            contact.neighbors_visible = false;
+        }
+
+        for (const contact of visibleNeighbors) {
+            if (visibleContactIds.has(String(contact.data.id))) {
+                contact.showNeighbors();
+            }
+        }
+    }
+
     __onTypesChanged() {
         this.updateMessagesDom();
+    }
+
+    onReporterFilterChanged() {
+        for (const msg of Object.values(this.messages)) {
+            for (const report of msg.reports) {
+                if (!report.isEnabled()) {
+                    report.hidePath();
+                }
+            }
+        }
+
+        this.updateReporterFilterDom();
+        this.updateMessagesDom();
+        this.updateContactsDom();
+        this.refreshVisibleNeighborPaths();
+        this.updatePaths();
+    }
+
+    hasActiveReporterFilter() {
+        const totalReporters = Object.keys(this.reporters).length;
+        if (totalReporters < 1) return false;
+
+        const enabledReporters = Object.values(this.reporters)
+            .filter(reporter => reporter.isEnabled()).length;
+
+        return enabledReporters !== totalReporters;
+    }
+
+    hasActiveContactListFilter() {
+        if (!Settings.getBool('contactTypes.clients', true)) return true;
+        if (!Settings.getBool('contactTypes.repeaters', true)) return true;
+        if (!Settings.getBool('contactTypes.rooms', true)) return true;
+        if (!Settings.getBool('contactTypes.sensors', true)) return true;
+        if (Settings.get('contactFilter.value', '').trim().length > 0) return true;
+
+        return false;
+    }
+
+    hasActiveContactFilter() {
+        return this.hasActiveReporterFilter() || this.hasActiveContactListFilter();
+    }
+
+    hasActiveChannelFilter() {
+        const channels = Object.values(this.channels);
+        if (channels.length < 1) return false;
+        return channels.some(channel => !channel.isEnabled());
+    }
+
+    hasActiveMessageFilter() {
+        if (this.hasActiveReporterFilter()) return true;
+        if (this.hasActiveContactListFilter()) return true;
+
+        return false;
+    }
+
+    updateContactsFilterWarning() {
+        if (!this.filter_warnings?.contacts) return;
+
+        const active = this.hasActiveContactFilter();
+        this.filter_warnings.contacts.container.hidden = !active;
+        this.filter_warnings.contacts.text.innerText = active ? "Filters active: some contacts are hidden." : "";
+    }
+
+    updateMessagesFilterWarning() {
+        if (!this.filter_warnings?.logs) return;
+
+        const active = this.hasActiveMessageFilter();
+        this.filter_warnings.logs.container.hidden = !active;
+        this.filter_warnings.logs.text.innerText = active ? "Filters active: some messages are hidden." : "";
+    }
+
+    isContactVisible(contactId, senderName = "") {
+        const filter = Settings.get('contactFilter.value', '').trim().toLowerCase();
+        const sender = String(senderName ?? "").trim().toLowerCase();
+
+        if (contactId === undefined || contactId === null) {
+            if (filter && filter !== '{multibyte}' && filter !== '{singlebyte}') {
+                return sender.includes(filter);
+            }
+            return !this.hasActiveContactFilter();
+        }
+
+        const contact = this.contacts[contactId] ?? false;
+        if (!contact || !contact.dom?.container) {
+            if (filter && filter !== '{multibyte}' && filter !== '{singlebyte}') {
+                return sender.includes(filter);
+            }
+            return !this.hasActiveContactFilter();
+        }
+
+        return !contact.dom.container.hidden;
     }
 
     sortContacts(fn=undefined, reverse=false) {
@@ -1289,11 +2028,13 @@ class MeshLog {
         }
 
         const items = Array.from(this.dom_contacts.children);
+        const visibleContactIds = this.getVisibleContactIdsByReporter();
         items.sort(fn);
         if (reverse) items.reverse();
         items.forEach(item => {
             let type = parseInt(item.dataset.type);
             let hidden = false;;
+            if (!visibleContactIds.has(item.dataset.contactId)) { hidden = true; }
             if (type == 1 && !Settings.getBool('contactTypes.clients', true)) { hidden = true; }
             else if (type == 2 && !Settings.getBool('contactTypes.repeaters', true)) { hidden = true; }
             else if (type == 3 && !Settings.getBool('contactTypes.rooms', true)) { hidden = true; }
@@ -1303,14 +2044,25 @@ class MeshLog {
                 let filter = Settings.get('contactFilter.value', '').trim().toLowerCase();
                 if (filter) {
                     let cmp1 = item.dataset.name.toLowerCase().includes(filter);
-                    let cmp2 = item.dataset.hash.toLowerCase().includes(filter);
+                    let cmp2 = item.dataset.pubkey.toLowerCase().includes(filter);
                     hidden = !cmp1 && !cmp2;
+
+                    // special selector
+                    if (filter == '{multibyte}') {
+                        hidden = item.dataset.multibyte == '0';
+                    } else if (filter == '{singlebyte}') {
+                        hidden = item.dataset.multibyte == '1';
+                    }
                 }
             }
+
 
             item.hidden = hidden;
             this.dom_contacts.appendChild(item)
         });
+        this.fadeMarkers();
+        this.updateContactsFilterWarning();
+        this.updateMessagesDom();
     }
 
     __init_contact_order() {
@@ -1495,22 +2247,18 @@ class MeshLog {
     }
 
     __init_reporters() {
-        Object.entries(this.reporters).forEach(([id,_]) => {
-            let reporter = this.reporters[id];
-            if (reporter.hasOwnProperty('dom')) {
-                return;
-            }
-            const self = this;
-            this.reporters[id].enabled = true;
-            this.dom_settings_reporters.hidden = true;
+        Object.values(this.reporters).forEach(reporter => {
+            reporter.createSettingsDom(false);
+            reporter.updateSettingsDom();
         });
+        this.updateReporterFilterDom();
     }
 
     __init_warnings() {
         this.dom_warning_messages = document.createElement("div");
         this.dom_warning_messages.classList.add("warnings");
         this.dom_warning_messages_btn = document.createElement("button");
-        this.dom_warning_messages_btn.innerText = "Show less";
+        this.dom_warning_messages_btn.innerText = "Show more";
         this.dom_warning_messages_btn.classList.add("btn");
         this.dom_warning_messages_btn.onclick = (e) => {
             let str = "Show more";
@@ -1556,6 +2304,8 @@ class MeshLog {
         if (params.hasOwnProperty('reporters')) {
             query.reporters = params['reporters'];
         }
+
+        query.report_limit = this.getReportLimitSetting();
 
         return query;
     }
@@ -1627,6 +2377,45 @@ class MeshLog {
         }
 
         return data.objects;
+    }
+
+    resetData() {
+        Object.values(this.contacts).forEach(contact => {
+            if (contact.marker) {
+                this.map.removeLayer(contact.marker);
+            }
+        });
+
+        this.link_layers.eachLayer(layer => {
+            this.link_layers.removeLayer(layer);
+        });
+
+        this.reporters = {};
+        this.contacts = {};
+        this.channels = {};
+        this.messages = {};
+        this.layer_descs = {};
+        this.visible_markers.clear();
+        this.visible_contacts = {};
+        this.links = {};
+        this.latest = 0;
+
+        this.dom_logs.replaceChildren();
+        this.dom_contacts.replaceChildren();
+        this.dom_settings_reporters.replaceChildren();
+
+        this.showWarning('');
+        this.clearNotifications();
+        this.new_messages = {};
+        this.updateReporterFilterDom();
+    }
+
+    reloadAllData() {
+        const interval = this.interval ?? 0;
+        this.setAutorefresh(0);
+        this.resetData();
+        this.loadAll();
+        this.setAutorefresh(interval);
     }
 
     loadNew(onload=null) {
@@ -1806,6 +2595,7 @@ class MeshLog {
             msg.createDom(false);
             msg.updateDom();
         }
+        this.updateMessagesFilterWarning();
     }
 
     onLoadMessages() {
@@ -1871,13 +2661,25 @@ class MeshLog {
         const empty = this.visible_markers.size < 1;
         Object.entries(this.contacts).forEach(([k,v]) => {
             if (!v.marker) return;
+
+            if (v.dom && v.dom.container) {
+                let hidden = v.dom.container.hidden;
+                let forcedVisible = this.visible_markers.has(v.data.id);
+
+                if (hidden && !forcedVisible) {
+                    v.setMarkerDisplayed(false);
+                } else {
+                    v.setMarkerDisplayed(true);
+                }
+            }
+
             if (empty || this.visible_markers.has(v.data.id)) {
-                v.marker.setOpacity(1);
-                v.marker.setZIndexOffset(1000);
+                v.setMarkerOpacity(1);
+                v.setMarkerZIndex(1000);
                 v.updateTooltip();
             } else {
-                v.marker.setOpacity(opacity);
-                v.marker.setZIndexOffset(2);
+                v.setMarkerOpacity(opacity);
+                v.setMarkerZIndex(2);
                 v.updateTooltip('');
             }
         });
@@ -1889,7 +2691,7 @@ class MeshLog {
         let matchDist = 99999;
 
         Object.entries(this.contacts).forEach(([k,c]) => {
-            if (c.checkHash(hash) && c.adv && !c.isVeryExpired() && (!repeater || c.isRepeater())) {
+            if (c.checkHash(hash) && c.adv && (!repeater || c.isRepeater())) {
                 let current = [c.adv.data.lat, c.adv.data.lon];
                 if (current[0] == 0 && current[1] == 0) return;
 
@@ -1932,7 +2734,7 @@ class MeshLog {
         const ln_decor_weight = 3;
         const ln_decor_outline = 5;
         const ln_offset = 8;
-        const ln_repeat = 150;
+        const ln_repeat = 250;
 
         const linkColor =  '#555';
         const linkStrokeColor = '#fff';
@@ -2017,13 +2819,11 @@ class MeshLog {
                 }
 
                 if (!decors[line_uid].includes(decor_id)) {
-                    const offset = ln_offset * decors[line_uid].length; // TODO - should increase per 
+                    const offset = ln_offset * decors[line_uid].length;
                     decors[line_uid].push(decor_id);
 
                     const strokeColor = path.reporter.getStyle().stroke ?? linkStrokeColor;
-
-                    const decorator1 = L.polylineDecorator(line1, {
-                        patterns: [
+                    const patterns = [
                         {
                             offset: offset,
                             repeat: ln_repeat,
@@ -2042,12 +2842,27 @@ class MeshLog {
                                 pathOptions: { renderer: this.canvas_renderer, stroke: true, color: path.reporter.getStyle().color, weight: ln_decor_weight }
                             })
                         }
-                    ]
+                    ];
+                    const decorator1 = L.polylineDecorator(line1, {
+                        patterns
                     });
 
-                    if (this.decor) {
-                        decorator1.addTo(this.link_layers);
+                    decorator1.checkVisibility = () => {
+                        let visible = meshlog.decor;
+
+                        if (visible) {
+                            const p1 = meshlog.map.latLngToLayerPoint(linePath[0]);
+                            const p2 = map.latLngToLayerPoint(linePath[1]);
+                            const pDist = p1.distanceTo(p2);
+
+                            visible = offset < pDist;
+                        }
+
+                        decorator1.setPatterns(visible ? patterns : []);
                     }
+
+                    decorator1.checkVisibility();
+                    decorator1.addTo(this.link_layers);
                 }
 
                 // Markers
@@ -2067,6 +2882,8 @@ class MeshLog {
     // Only adds descriptors, not layers
     showPath(id, path, src, reporter) {
         if (this.layer_descs.hasOwnProperty(id)) return;
+        if (!reporter) return;
+        if (reporter.isEnabled && !reporter.isEnabled()) return;
 
         let hashes = path ? path.split(',') : [];
         let prev = {

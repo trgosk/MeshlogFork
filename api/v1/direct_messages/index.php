@@ -5,6 +5,7 @@ include "../utils.php";
 
 $meshlog = new MeshLog($config['db']);
 $err = $meshlog->getError();
+$reportLimit = getReportLimitParam(1);
 
 if ($err) {
     $results = array('error' => $err);  
@@ -16,6 +17,7 @@ if ($err) {
         'after_ms' => getParam('after_ms', 0),
         'before_ms' => getParam('before_ms', 0)
     ));
+    limitObjectReportsPerReporter($results['objects'], $reportLimit);
 }
 
 header('Content-Type: application/json; charset=utf-8');

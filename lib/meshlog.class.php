@@ -16,11 +16,12 @@ require_once 'meshlog.raw_packet.class.php';
 
 define("MAX_COUNT", 2500);
 define("DEFAULT_COUNT", 500);
-define("CONTACTS_COUNT", 5000);  //FIX
+define("DEFAULT_CONTACTS_COUNT", 5000);
+define("MAX_GETALL_REPORTS_COUNT", 5000);
 
 class MeshLog {
     private $error = '';
-    private $version = 7;
+    private $version = 8;
     private $settings = array(
         MeshlogSetting::KEY_DB_VERSION => 0,
         MeshlogSetting::KEY_MAX_CONTACT_AGE => 1814400,
@@ -191,7 +192,13 @@ class MeshLog {
         if ($contact) {
             $contact->name = $data['contact']['name'];
             if (array_key_exists('hash_size', $data)) {
-                $contact->hash_size = $data['hash_size'];
+                $hs = intval($data['hash_size']);
+                if ($hs > 1) {
+                    $contact->multibyte = 1;
+                }
+                if ($hs > intval($contact->hash_size)) {
+                    $contact->hash_size = $data['hash_size'];
+                }
             }
         } else {
             $contact = MeshLogContact::fromJson($data, $this);
@@ -415,7 +422,27 @@ class MeshLog {
         return $pkt->save($this);
     }
 
-    // TODO
+    private function array_path(array $array, string $path, $default = null) {
+        $keys = explode('.', $path);
+        $current = $array;
+
+        foreach ($keys as $key) {
+            if (!is_array($current) || !array_key_exists($key, $current)) {
+                return $default;
+            }
+            $current = $current[$key];
+        }
+
+        return $current;
+    }
+
+    private function appendInfluxDbLine($key, $val, $first=false) {
+        if ($val === null) return "";
+        $str = $first ? '' : ',';
+        $str .= $key . "=" . $val;
+        return $str;
+    }
+
     private function insertSelfReport($data, $reporter) {
         if (!$reporter) return;
         if (!$data['contact'] || !$data['sys']) return;
@@ -444,6 +471,18 @@ class MeshLog {
         $cname = str_replace("\"", "", $cname);
 
         $line = "mc_reporter,contact=$pubkey,name=$cname heap_total=$heap_total,heap_free=$heap_free,rssi=$rssi,uptime=$uptime";
+        $line .= $this->appendInfluxDbLine("tx_packets", $this->array_path($data, 'sys.stats.tx.packets'));
+        $line .= $this->appendInfluxDbLine("tx_packets_total", $this->array_path($data, 'sys.stats.tx.packets_total'));
+        $line .= $this->appendInfluxDbLine("tx_air_time", $this->array_path($data, 'sys.stats.tx.air_time'));
+        $line .= $this->appendInfluxDbLine("tx_air_time_total", $this->array_path($data, 'sys.stats.tx.air_time_total'));
+        $line .= $this->appendInfluxDbLine("tx_air_time_duty", $this->array_path($data, 'sys.stats.tx.air_time_duty'));
+
+        $line .= $this->appendInfluxDbLine("rx_packets", $this->array_path($data, 'sys.stats.rx.packets'));
+        $line .= $this->appendInfluxDbLine("rx_packets_total", $this->array_path($data, 'sys.stats.rx.packets_total'));
+        $line .= $this->appendInfluxDbLine("rx_air_time", $this->array_path($data, 'sys.stats.rx.air_time'));
+        $line .= $this->appendInfluxDbLine("rx_air_time_total", $this->array_path($data, 'sys.stats.rx.air_time_total'));
+        $line .= $this->appendInfluxDbLine("rx_air_time_duty", $this->array_path($data, 'sys.stats.rx.air_time_duty'));
+
         $error = $this->writeInfluxDb($line);
     }
 
@@ -690,8 +729,17 @@ class MeshLog {
                 t.public_key,
                 t.name,
                 t.hash_size,
+                t.multibyte,
                 t.last_heard_at,
                 t.created_at,
+
+                -- Reporter ids that have seen this contact in any advertisement
+                (
+                    SELECT COALESCE(JSON_ARRAYAGG(ar.reporter_id), JSON_ARRAY())
+                    FROM advertisements a2
+                    JOIN advertisement_reports ar ON ar.advertisement_id = a2.id
+                    WHERE a2.contact_id = t.id
+                ) AS reporter_ids,
 
                 -- Latest advertisement
                 (
@@ -704,7 +752,21 @@ class MeshLog {
                         'type', a.type,
                         'flags', a.flags,
                         'sent_at', a.sent_at,
-                        'created_at', a.created_at
+                        'created_at', a.created_at,
+                        'reports', COALESCE((
+                            SELECT JSON_ARRAYAGG(
+                                JSON_OBJECT(
+                                    'id', ar.id,
+                                    'reporter_id', ar.reporter_id,
+                                    'snr', ar.snr,
+                                    'path', ar.path,
+                                    'received_at', ar.received_at,
+                                    'created_at', ar.created_at
+                                )
+                            )
+                            FROM advertisement_reports ar
+                            WHERE ar.advertisement_id = a.id
+                        ), JSON_ARRAY())
                     )
                     FROM advertisements a
                     WHERE a.contact_id = t.id
@@ -739,6 +801,7 @@ class MeshLog {
 
         $results = [];
         while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $row['reporter_ids'] = json_decode($row['reporter_ids'], true) ?? array();
             $row['telemetry'] = json_decode($row['telemetry'], true);
             $row['advertisement'] = json_decode($row['advertisement'], true);
             $results[] = $row;
